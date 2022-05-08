@@ -134,11 +134,21 @@
 ##  ............................................................................
 ##  Paquetes                                                                ####
 
+import::from(magrittr, "%T>%", "%$%",  "%<>%", .into = "operadores")
 import::from(parallel, detectCores, makePSOCKcluster, stopCluster)
 import::from(doParallel, registerDoParallel)
 import::from(conectigo, cargar_fuentes)
 import::from(GGally, ggpairs, wrap)
-pacman::p_load(finetune, tensorflow, keras, tictoc, tidymodels, tidyverse)
+import::from(janitor, make_clean_names)
+pacman::p_load(finetune, parsnipExtra, tensorflow, keras, tictoc, tidymodels,
+					tidyverse)
+
+options(pillar.sigfig    = 5,
+		  tibble.print_min = 10,
+		  scipen = 999,
+		  digits = 7,
+		  readr.show_col_types = FALSE,
+		  dplyr.summarise.inform = FALSE)
 
 ##  ............................................................................
 ##  Funciones                                                               ####
@@ -176,6 +186,35 @@ drako <- theme_bw(base_family = "yano", base_size = 14) +
 			plot.title     = element_text(size = 18),
 			plot.subtitle  = element_text(size = 12))
 
+
+##  ............................................................................
+##  Ejercicios obligatorios                                                 ####
+
+# JERCICIO 1. datos College
+# Analiza la clasificación entre colegios privados y públicos de las
+# universidades de EE. UU. según varios estadísticos de desempeño. Los datos se
+# encuentran en el objeto College del paquete ISLR y corresponden a la edición
+# de 1995 de US News y World Report.
+ 
+college <- ISLR::College |> 
+ as_tibble(.name_repair = make_clean_names)
+
+
+# EJERCICIO 2. datos Auto
+# Analiza el consumo de gasolina para 392 vehículos según sus características.
+# Los datos se encuentran en el objeto Auto del paquete ISLR y fueron utilizados
+# en 1983 en la American Statistical Association Exposition.
+ 
+autos <- ISLR::Auto |> 
+	as_tibble()
+
+# En ambos ejercicios sigue los siguientes pasos:
+# Observa y grafica los datos. 
+# Transforma los datos cuando sea necesario. 
+# Divide el conjunto de datos en uno de entrenamiento y otro de prueba. 
+# Construye el modelo NN, grafica e interpreta el resultado. 
+# Evalúa la performance del modelo NN. 
+
 ##  ............................................................................
 ##  Boston                                                                  ####
 
@@ -198,11 +237,9 @@ boston_std <- recipe(medv ~ ., data = boston) |>
 ### . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . ..
 ### Explorar                                                                ####
 
-boston_std |> 
- ggpairs(data = _, lower = list(continuous = loess_lm),
-         upper = list(continuous = wrap("cor", size = 5))) 
-
-
+# boston_std |> 
+#  ggpairs(data = _, lower = list(continuous = loess_lm),
+#          upper = list(continuous = wrap("cor", size = 5))) 
 
 ### . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . ..
 ### Interacciones                                                           ####
@@ -211,9 +248,6 @@ boston_std |>
 # combinado es diferente (menor o mayor) de lo que esperaríamos si tuviéramos
 # que agregar el impacto de cada uno de sus efectos cuando se consideran solos.
 
-
-
-
 ### . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . ..
 ### Muestreo                                                                ####
 
@@ -221,64 +255,10 @@ boston_split <- initial_split(boston, prop = 0.7)
 boston_train <- training(boston_split)
 boston_test  <-  testing(boston_split)
 
-train
+boston_train
 
 ### . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . ..
-### Modelos                                                                 ####
-
-show_engines("mlp")
-
-# nnet: tenga en cuenta que parsnip establece automáticamente la activación
-# lineal en la última capa.
-mlp_nnet <- mlp(hidden_units = tune(),
-					 penalty      = tune(),
-					 epochs       = tune()) |>
- set_engine("nnet") |> 
- set_mode("regression")
-
-
-# brulee
-mlp_brulee <- mlp(hidden_units = tune(),
-						penalty      = tune(), 
-						epochs       = tune(),
-						# learn_rate   = 100L,
-						activation   = "relu") |> 
- set_engine('brulee') |> 
- set_mode('regression')
-
-# keras
-mlp_keras <- mlp(hidden_units = tune(), 
-					  # penalty      = tune(),
-					  # epochs       = tune(),
-					  activation   = "softmax") |> 
-  set_engine('keras') %>%
-  set_mode('regression')
-
- 
-# hidden_units: el número de unidades ocultas,
-# penalty:      la cantidad de penalización por caída de peso.
-# epochs:       el número de épocas/iteraciones de ajuste en el entrenamiento
-#               del modelo.
-# trace = 0:    evita el registro adicional del proceso de entrenamiento.
-# MaxNWts:      el número máximo permitido de pesos. No hay un límite intrínseco
-#               en el código, pero aumentar MaxNWts probablemente permitirá
-#               ajustes que son # muy lentos y consumen mucho tiempo.
-
-
-# evaluar los posibles valores de los hiperparámetros de los modelos:
-mlp_param <- mlp_keras |> extract_parameter_set_dials()
-mlp_param |> extract_parameter_dials("hidden_units")
-mlp_param |> extract_parameter_dials("penalty")
-mlp_param |> extract_parameter_dials("epochs")
-mlp_param |> extract_parameter_dials("activation")
-
-# Esta salida indica que los objetos de parámetro están completos e imprime sus
-# rangos predeterminados. Estos valores se utilizarán para demostrar cómo crear
-# diferentes tipos de cuadrículas de parámetros.
-
-
-### . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . ..
-### Recetas                                                                 ####
+### Preprocesamiento                                                        ####
 
 # aplicar `step_YeoJohnson()` antes de normalizar
 
@@ -297,16 +277,86 @@ mlp_param |> extract_parameter_dials("activation")
 # combinemos esta receta de ingeniería de características con nuestra
 # especificación de modelo de red neuronal mlp_spec.
 
-mlp_rec <- boston_train |> 
+# receta básica solo predictores normalizados
+solo_normalizado <- boston_train |> 
  recipe(medv ~ .) |> 
  step_normalize(all_predictors())
 
-mlp_yeo <- boston_train |> 
+# primero un corrección del sesgo y luego normalizar
+normalizado_yeoj <- boston_train |> 
  recipe(medv ~ .) |> 
  step_YeoJohnson(all_numeric_predictors()) |> 
  step_normalize(all_predictors())
 
-mlp_rec |> tidy()
+solo_normalizado|> tidy()
+
+### . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . ..
+### Modelos                                                                 ####
+
+show_engines("mlp")
+
+# nnet: tenga en cuenta que parsnip establece automáticamente la activación
+# lineal en la última capa.
+mlp_nnets <- mlp(hidden_units = tune(),
+					  penalty      = tune(),
+					  epochs       = tune()) |>
+	set_engine("nnet") |> 
+	set_mode("regression")
+
+
+# keras
+mlp_keras <- mlp(hidden_units = tune(), 
+					  penalty      = 0,
+					  epochs       = 500,
+					  activation   = "softmax") |> 
+	set_engine('keras') %>%
+	set_mode('regression')
+
+
+# hidden_units: el número de unidades ocultas,
+# penalty:      la cantidad de penalización por caída de peso.
+# epochs:       el número de épocas/iteraciones de ajuste en el entrenamiento
+#               del modelo.
+# trace = 0:    evita el registro adicional del proceso de entrenamiento.
+# MaxNWts:      el número máximo permitido de pesos. No hay un límite intrínseco
+#               en el código, pero aumentar MaxNWts probablemente permitirá
+#               ajustes que son # muy lentos y consumen mucho tiempo.
+
+
+# evaluar los posibles valores de los hiperparámetros de los modelos:
+mlp_param <- mlp_nnets |> extract_parameter_set_dials()
+mlp_param |> extract_parameter_dials("hidden_units")
+mlp_param |> extract_parameter_dials("penalty")
+mlp_param |> extract_parameter_dials("epochs")
+# mlp_param |> extract_parameter_dials("activation")
+
+# Esta salida indica que los objetos de parámetro están completos e imprime sus
+# rangos predeterminados. Estos valores se utilizarán para demostrar cómo crear
+# diferentes tipos de cuadrículas de parámetros.
+
+# lasso
+lasso_reg <- linear_reg(penalty = tune(), mixture = 1) |> 
+ set_mode("regression") |> 
+ set_engine("glmnet")
+
+# penalty = cuantas variables se van a remover
+# mixture = decidir si queremos hacer una regularización de tipo L1 o L2. en
+#           este caso como lo que queremos es un lasso, seleccionamos 1. si
+#           quisiéramos un `ridge regression` seleccionaríamos un 0, y si
+#           quisiéramos un `elastic net` le ponemos `tune()`
+
+# ver los parámetros principales del modelo
+lasso_reg |> extract_parameter_set_dials()
+
+# revisar específicamente cuanto es el rango de penalización por defecto
+lasso_param |> extract_parameter_dials("penalty")
+
+# actualicemos para que la penalización vaya de 0 a 1
+lasso_param <- lasso_reg |> extract_parameter_set_dials() |> 
+ update(penalty = penalty(range = c(0, 1)))
+
+# validar que la actualización del parámetro penalty se realizó correctamente
+lasso_param |> extract_parameter_dials("penalty")
 
 ### . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . ..
 ### Cross-validación                                                        ####
@@ -314,39 +364,56 @@ mlp_rec |> tidy()
 boston_folds <- vfold_cv(boston_train, strata = medv)
 
 ### . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . ..
-### Workflow                                                                ####
+### Listas                                                                  ####
 
-recetas <- list(normalizado = mlp_rec, sesgado = mlp_yeo)
-modelos_sin_gpu <- list(nnet = mlp_nnet)
+# establecer lista de recetas de preprocesamiento y modelos candidatos
+
+recetas <- list(normalizado = solo_normalizado, 
+					 sesgo_yeojh = normalizado_yeoj)
+
+# motores de redes neuronales candidatos
+modelos_sin_gpu <- list(nnets = mlp_nnets, lasso = lasso_reg)
 modelos_con_gpu <- list(keras = mlp_keras)
 
-wflow_simple <- workflow_set(preproc = list(normalizado = mlp_rec), 
-									  models  = list(nnet = mlp_nnet))
+### . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . ..
+### Workflows                                                               ####
 
 
+# workflow con motores que no requieren uso de GPU
 wflow_sin_gpu <- workflow_set(preproc = recetas, 
 										models  = modelos_sin_gpu,
 										cross   = TRUE)
 
-wflow_con_gpu <- workflow_set(preproc = list(normalizado = mlp_rec), 
+
+# actualicemos los parámetros de penalización para lasso
+wflow_sin_gpu %<>%
+ option_add(param_info = lasso_param, id = "normalizado_lasso") %<>%
+ option_add(param_info = lasso_param, id = "sesgo_yeojh_lasso")
+
+
+# workflow con motores que si requiere uso de GPU
+wflow_con_gpu <- workflow_set(preproc = recetas, 
 										models  = list(keras = mlp_keras))
 
+
+# ver contenido del los workflows
 wflow_sin_gpu
 wflow_con_gpu
 
+
 # verificar uno de los modelos
-wflow_sin_gpu |> extract_workflow(id = "normalizado_nnet")
+wflow_sin_gpu |> extract_workflow(id = "normalizado_nnets")
 
 ### . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . ..
 ### Tuning                                                                  ####
 
-metricas <- metric_set(rmse, rsq, mae)
+# no es necesario definirlas
+metricas <- metric_set(rmse, rsq)
 
-# cuadrícula regular
-grid_ctrl <- control_grid(
- save_pred     = TRUE,
- parallel_over = "everything",
- save_workflow = TRUE)
+# con los métodos de carrera, el proceso de ajuste evalúa todos los modelos
+# en un subconjunto inicial de remuestreos. En función de sus métricas de
+# rendimiento actuales, algunos conjuntos de parámetros no se consideran en
+# remuestreos posteriores.
 
 # método race
 race_ctrl <- control_race(
@@ -355,57 +422,49 @@ race_ctrl <- control_race(
 	save_workflow = TRUE)
 
 
+# habilitar procesamiento paralelo para usar todos los núcleos del CPUs
 all_cores <- detectCores(logical = FALSE)
 clusterpr <- makePSOCKcluster(all_cores)
 registerDoParallel(clusterpr)
 
 
+# nnets: 26.15 segundos
 tic()
-# 13.13
-grid_results <- wflow_simple |> 
-	workflow_map(
-		seed = 1503,
-		resamples = boston_folds,
-		verbose = TRUE,
-		grid = 25,
-		control = grid_ctrl, 
-		metrics = metricas)
-toc()
-
-tic()
-# 1 modelo -> 23 seg
 grid_sin_gpu <- wflow_sin_gpu |> 
 	workflow_map(
 		"tune_race_anova",
 		seed = 1503,
 		resamples = boston_folds,
 		verbose = TRUE,
-		grid = 25,
+		grid    = 20,
 		control = race_ctrl, 
 		metrics = metricas)
 toc()
 
+# detener paralización
+stopCluster(clusterpr)
+unregister()
+
 
 # keras
 tic()
-# 1 modelos -> 310 seg = 5 min
+# 2 recetas -> 310 seg = 5 min
 grid_gpu <- wflow_con_gpu |> 
 	workflow_map(
 		"tune_race_anova",
 		seed = 1503,
 		resamples = boston_folds,
 		verbose = TRUE,
-		grid = 25,
+		grid    = 25,
 		control = race_ctrl, 
 		metrics = metricas)
 toc()
 
 
-stopCluster(clusterpr)
-unregister()
+### . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . ..
+### Revisión                                                                ####
 
-
-nrow(collect_metrics(grid_sin_gpu, summarize = FALSE)))
+nrow(collect_metrics(grid_sin_gpu, summarize = FALSE)) # 872
 nrow(collect_metrics(grid_gpu, summarize = FALSE))
 
 grid_sin_gpu
@@ -415,19 +474,55 @@ grid_gpu
 tune_res <- bind_rows(grid_sin_gpu, grid_gpu)
 
 ### . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . ..
-### Evaluar                                                                 ####
+### Extracciones                                                            ####
+
+# extracciones
+grid_sin_gpu |> extract_workflow_set_result(id = "normalizado_lasso")
+
+
+# seleccionar el mejor con base a una métrica
+grid_sin_gpu |> extract_workflow_set_result(id = "normalizado_nnets") |> 
+ select_best(metric = "rmse")
+
+# revisar las notas
+grid_sin_gpu |>
+ extract_workflow_set_result(id = "normalizado_nnets") |> 
+ collect_notes()
+
+# Esto puede ocurrir cuando el modelo predice un valor único para todas las
+# muestras. Dos ejemplos podrían ser un modelo regularizado que elimine todos
+# los predictores excepto el intercepto y un árbol CART que no contenga
+# divisiones.
+
+
+grid_sin_gpu |> extract_preprocessor(id = "normalizado_nnets")
+grid_sin_gpu |> extract_spec_parsnip(id = "normalizado_nnets")
+grid_sin_gpu |> extract_workflow(id = "normalizado_nnets")
+
+# revisar métricas
+grid_sin_gpu |>
+ extract_workflow_set_result(id = "normalizado_nnets") |> 
+ collect_metrics()
+
+### . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . ..
+### Evaluación                                                              ####
+
+grid_sin_gpu |> 
+ rank_results() |> 
+ filter(.metric == "rmse") |> 
+ select(model, .config, rmse = mean, rank)
 
 tune_res |> 
  rank_results() |> 
  filter(.metric == "rmse") |> 
  select(model, .config, rmse = mean, rank)
 
-
-tune_res |> 
+top_models <- grid_sin_gpu |> 
  rank_results(select_best = TRUE, rank_metric = "rmse") |> 
  select(modelo = wflow_id, .metric, mean, rank) |> 
  pivot_wider(names_from = .metric, values_from = mean)
 
+top_models
 
 # RMSE: La idea básica es medir qué tan malas/erróneas son las predicciones del
 # modelo en comparación con los valores reales observados. Entonces, un RMSE
@@ -444,23 +539,39 @@ tune_res |>
 # concentrados están los datos alrededor de la línea de mejor ajuste
 
 autoplot(
-	tune_res,
+	grid_sin_gpu,
 	rank_metric = "rmse",  
 	metric = "rmse",       
-	select_best = TRUE,
-) +
+	select_best = TRUE) +
 	geom_text(aes(y = mean - 1.2, label = wflow_id, color = wflow_id), 
 				 angle = 90, hjust = 1) +
-	lims(y = c(-5, 22.5)) +
-	theme(legend.position = "bottom") + drako
+	lims(y = c(-5, 10)) +
+	drako
+
+### . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . ..
+### Hiperparámetros                                                         ####
+
+autoplot(grid_sin_gpu, id = "normalizado_nnets", metric = "rmse")
 
 
+### . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . ..
+### Finalizar                                                               ####
 
-autoplot(tune_res, id = "sesgado_nnet", metric = "rmse")
-autoplot(tune_res, id = "normalizado_keras", metric = "rmse")
-autoplot(tune_res, type = "parameters", id = "sesgado_nnet", metric = "rmse")
+nombre_mejor_modelo <- top_models |> 
+ filter(rank == 1) |> 
+ pull(modelo)
+
+# seleccionar el mejor modelo
+mejor_modelo <- grid_sin_gpu %>% 
+	extract_workflow_set_result(nombre_mejor_modelo) %>% 
+	select_best(metric = "rmse")
+
+mejor_modelo
 
 
-
+boosting_test_results <- grid_sin_gpu %>% 
+	extract_workflow("normalizado_nnets") %>% 
+	finalize_workflow(best_results) %>% 
+	last_fit(split = concrete_split)
 
 

@@ -1,0 +1,843 @@
+---
+title: Redes Nautosnales
+subtitle: Ejercicio Obligatorio II
+author:
+- name: William Chavarría
+  affiliation: Máxima Formación
+  email: wchavarria@tigo.com.gt
+date: '`r format(Sys.Date())`'
+output: 
+  bookdown::html_document2:
+    toc: true
+    toc_float: true
+    highlight: pygments
+    theme: spacelab
+    css: custom.css
+    fig_caption: true
+    df_print: paged
+    # includes: header.html
+bibliography: [paquetes.bib, ts.bib]
+biblio-style: "apalike"
+link-citations: true
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo        = TRUE, 
+                      include     = TRUE,
+                      cache       = FALSE,
+                      fig.align   = 'center',
+                      message     = FALSE,
+                      warning     = FALSE, 
+                      comment     = NA, 
+                      highlight   = TRUE,
+                      strip.white = TRUE,
+                      dev         = "svglite",
+                      fig.width   = 11,
+                      fig.asp     = 0.5,
+                      fig.show    = "hold",
+                      fig.align   = "center")
+```
+
+# Autos {.tabset .tabset-fade .tabset-pills}
+
+## Descripción
+
+Analiza el consumo de gasolina para 392 vehículos según sus características.
+Los datos se encuentran en el objeto Auto del paquete ISLR y fueron utilizados
+en 1983 en la American Statistical Association Exposition.
+
+En ambos ejercicios sigue los siguientes pasos:
+1. Observa y grafica los datos. 
+2. Transforma los datos cuando sea necesario. 
+3. Divide el conjunto de datos en uno de entrenamiento y otro de prueba. 
+4. Construye el modelo NN, grafica e interpreta el resultado. 
+5. Evalúa la performance del modelo NN. 
+
+## Paquetes
+
+```{r}
+options(warn = -1,
+        scipen = 1,
+		  dplyr.summarise.inform = FALSE,
+		  tibble.print_min = 10,
+		  pillar.sigfig = 4)
+```
+
+
+```{r}
+import::from(magrittr, "%T>%", "%$%",  "%<>%", .into = "operadores")
+import::from(cowplot, .except = "stamp")
+import::from(parallel, detectCores, makePSOCKcluster, stopCluster)
+import::from(doParallel, registerDoParallel)
+import::from(conectigo, cargar_fuentes)
+import::from(GGally, ggpairs, wrap)
+import::from(janitor, make_clean_names)
+pacman::p_load(finetune, 
+					parsnipExtra, 
+					textfeatures, 
+					tensorflow, 
+					keras, 
+					tictoc,
+					textrecipes,
+					tidymodels,
+					tidyverse)
+```
+
+## Funciones
+
+```{r}
+loess_lm <- function(data, mapping, ...){
+	
+	ggplot(data = data, mapping = mapping) + 
+		geom_point(alpha = 0.9) + 
+		stat_smooth(formula = y ~ x, 
+						method = "lm", 
+						se = TRUE, 
+						color = "red",
+						fill = "red",
+						size = 0.5, 
+						alpha = 0.2,
+						linetype = "longdash", 
+						...)
+}
+```
+
+
+```{r}
+tabla <- function(df, cap = "prueba") {
+  df %>% 
+   kbl(booktabs = TRUE, linesep = "", caption = cap, escape = F) %>% 
+   kable_paper(lightable_options = "hover", full_width = F)}
+```
+
+```{r}
+resaltar <- function(texto) {
+ glue::glue("<span style='background-color: #FFFF00'>**{texto}**</span>")
+}
+```
+
+```{r}
+rlt <- function(texto, color) {
+ a <- "<span style='background-color: "
+ b <- "'>"
+ c <- "</span>"
+ t <- str_c("**", texto, "**")
+ f <- str_c(a, color, b)
+ glue::glue(f, t, c) 
+}
+```
+
+```{r}
+colort <- function(vec, colorv, paleta, usarv = T) {
+	
+	# show_col(viridis_pal(option = "turbo")(30))
+	# paleta solo pueden ser A (magma), B (inferno), C (plasma),
+	# D (viridis) y E(cividis)
+	# rojo:     #F4354D
+	# amarillo: #FCA108
+	# verde:    #00AB40
+	if (usarv == T) {
+		
+		cell_spec(vec,
+				 color = "white",
+				 bold = TRUE,
+				 background = spec_color(x = colorv, 
+				 								option = paleta, 
+				 								direction = 1))
+	} else {
+		
+		cell_spec(vec,
+				 color = "white",
+				 bold = TRUE,
+				 background = colorv)
+	}
+	
+	
+}
+```
+
+
+```{r}
+unregister <- function() {
+  env <- foreach:::.foreachGlobals
+  rm(list=ls(name=env), pos=env)
+}
+```
+
+
+## Opciones
+
+```{r}
+colorx <- c(rojo = "#F4354D", amarillo = "#FCA108", verde = "#00AB40")
+```
+
+```{r}
+cargar_fuentes()
+```
+
+```{r}
+yunkel <- theme_cowplot(font_family = "yano") +
+	       theme(plot.margin = unit(c(3, 1, 1, 1), "mm"), 
+	             axis.title = element_text(size = 12))
+```
+
+```{r}
+# tema con grid horizontal y vertical
+drako <- theme_bw(base_family = "yano", base_size = 14) +
+	      theme(plot.margin = unit(c(6, 1, 1, 1), "mm"),
+	            axis.title = element_text(size = 12),
+	            plot.subtitle = element_text(size = 8,
+                                            family = "sans"))
+```
+
+```{r}
+theme_set(drako)
+```
+
+# Load
+
+```{r}
+autos <- ISLR::Auto |> as_tibble()
+```
+
+```{r, paged.print = FALSE}
+head(autos) |> tabla(cap = "Vehículos")
+```
+
+# EDA
+
+(ref:gr-01) Gráfica de la serie
+
+```{r, gr-01, fig.cap='(ref:gr-01)'}
+(autos |> ggplot(aes(x = fecha, y = value)) +
+ geom_line()) |> 
+ agregar_info() +
+ labs(title = "Índice trimestral de comercio al por menor en la zona del autos (17 países), 1996-2011",
+      subtitle = "Cubre el comercio al por mayor y al por menor, y la reparación de vehículos de motor y motocicletas")
+```
+
+</br>
+
+El gráfico de tiempo revela inmediatamente algunas características interesantes.
+
+- Hubieron dos puntos de inflexión importantes. El primero, una caída del índice de Octubre
+de 1996 a enero de 1997 cuando empezó a recuperarse.  La segunda y más notable, se dió a
+partir de Octubre del 2000, finalizando en Enero de 2001.  
+
+- La serie evoluciona con una tendencia fuerte hasta llegar aun *punto de cambio* en octubre
+de 2007 cuando cae de forma sostenida hasta que se estabiliza en aproximadamente 97 puntos
+en octubre de 2010, pero nunca regresa a sus niveles anteriores.
+
+- La muestra una fuerte tendencia a la alza. La serie no es estacionaria en la **media**.
+
+- A simple vista no se aprecia estacionalidad.
+
+## Componentes
+
+```{r, fig.asp=0.6}
+autos |> model(stl = STL(value)) |> components() |> autoplot()
+```
+
+</br>
+
+Las barras grises a la izquierda de cada panel muestran las escalas relativas de los
+componentes. Cada barra gris representa la misma longitud pero debido a que las gráficas
+están en diferentes escalas, las barras varían en tamaño. La barra gris grande en el panel
+del medio muestra que la variación en el componente restante es menor en comparación con la
+variación en los datos.
+
+<p class="comment">
+La descomposición detectó un componente de tendencia muy fuerte, así como estacionalidad.
+</p>
+
+## Tendencia
+
+Veamos si la tendencia observada es significativa
+
+```{r}
+autos %$%
+ coxstuart(value) |> 
+ bind_rows() |>
+ clean_names() |> 
+ tabla(cap = "Prueba de tendencia")
+```
+
+</br>
+
+<p class="comment">
+Obtenemos que la tendencia es significativa
+</p>
+
+## Estacionalidad
+
+(ref:gr-02) Resumen gráfico
+
+```{r, gr-02, fig.cap='(ref:gr-02)', fig.width=8}
+autos |> 
+ gg_season(value, labels = "both") +
+ labs(y = "Indice Comercial", 
+      title = "Gráfico estacional: Índice comercial en la zona del autos")
+```
+
+<br/>
+
+<p class="comment">
+En el gráfico \@ref(fig:gr-02) se observa que los años anteriores al 2008, vemos un patrón
+de salto en el crecimiento entre el Q1 y el Q2, al igual que del Q2 al Q3.  Entre el Q3 y
+Q4 el índice es estable con la excepción de los años de 1996 a 1999, donde si se aprecia
+un incremento.
+</p>
+
+(ref:gr-03) Resumen gráfico
+
+```{r, gr-03, fig.cap='(ref:gr-03)'}
+autos |> 
+ gg_subseries(value) +
+ labs(y = "Indice Comercial", 
+ 	   title = "Gráfico estacional: Índice comercial en la zona del autos")
+```
+
+<br/>
+
+<p class="comment">
+En el gráfico \@ref(fig:gr-03) se observa que lo que indicábamos en el gráfico
+\@ref(fig:gr-02) de que, en términos generales, para la mayoría de años, se ve un crecimiento
+del índice en el Q4.
+</p>
+
+## Estacionariedad
+
+Veamos los retardos significativos en un correlograma. Para esto, utilizaremos la función
+`retardos()`, la cual devuelve los valores de lag al igual que la función
+`ggAcf(autos_raw, plot = F)` con la diferencia de que solo devuelve los lags que son
+significativos. 
+
+### Prueba informal
+
+Grafiquemos el correlograma de la serie **sin transformar** solo para efectos de poder
+evaluar si la serie es estacionaria.
+
+(ref:gr-04) ACF Volcan sin transformar
+
+```{r, gr-04, fig.cap='(ref:gr-04)'}
+autos |> gg_tsdisplay(value, plot_type = "partial")
+```
+
+<br/>
+
+```{r, retar}
+retardos(autos, ACF, columna = value) |> 
+ left_join(retardos(autos, PACF, value), by = "lag") |> 
+ tabla(cap = "Retardos significativos en ACF y PACF")
+```
+
+<br/>
+
+<p class="comment">
+Tanto en el gráfico \@ref(fig:gr-02) como en la tabla \@ref(tab:retar) se observa que las
+autocorrelaciones para los retardos que van del 1 al 13 en el ACF exceden los límites de
+significancia, y que las autocorrelaciones descienden a cero después del retardo 13. Las
+autocorrelaciones para los retardos del 1 al 13 son positivas y disminuyen en magnitud al
+aumentar retardo.
+</p>
+
+<p class="comment">
+En el autocorrelograma parcial, vemos que la autocorrelación parcial en el retardo 1 es
+positiva y excede los límites de significancia (0.956), mientras que la autocorrelación
+parcial en el retardo 5 es negativa y también excede los límites de significancia (-0.26).
+</p>
+
+Cuando los datos tienen una tendencia, las autocorrelaciones para pequeños retrasos tienden a
+ser grandes y positivas porque las observaciones cercanas en el tiempo también tienen un
+valor cercano. Entonces, el ACF de una serie de tiempo con tendencia tiende a tener valores
+positivos que disminuyen lentamente a medida que aumentan los retrasos.
+
+`r resaltar("El decrecimiento lento (persistencia) en el ACF indica que la serie no
+es estacionaria.")`
+
+### Pruebas formales
+
+```{r}
+autos_test <- autos |> 
+ as_tibble() |> 
+ summarise(across(value, est)) |> 
+ slice(2) |> 
+ rename_with(~ str_remove_all(.x, "value_")) |> 
+ pivot_longer(cols = everything(), 
+              names_to = "test",
+              values_to = "p_valor") |> 
+ mutate(null_hypothesis = c("stationarity", "stationarity", "non-stationarity"))
+```
+
+
+```{r, formal-test}
+autos_test |> 
+ mutate(resultado = c("no-estacionaria", 
+                      "no-estacionaria",
+                      "no-estacionaria")) |> 
+ tabla(cap = "Pruebas formales de estacionariedad")
+```
+
+</br>
+
+`r resaltar("Los resultados de los test de estacionaridad son consistentes, la serie no es
+estacionaria")`
+
+# Transformación
+
+Las transformaciones como los logaritmos pueden ayudar a estabilizar la varianza de una serie
+temporal. La diferenciación puede ayudar a estabilizar la media de una serie temporal
+eliminando los cambios en el nivel de una serie temporal y, por lo tanto, eliminando (o
+reduciendo) la tendencia y la estacionalidad.
+
+## Logaritmo
+
+A continuación, revisemos que efecto tiene la aplicación del logaritmo sobre la serie:
+
+(ref:gr-05) Efecto del logaritmo sobre la serie
+
+```{r, gr-05, fig.cap='(ref:gr-05)', fig.asp=0.4}
+autos |> 
+ mutate(log_value = log(value)) |> 
+ pivot_longer(value:log_value, "variable", "valor") |> 
+ ggplot(aes(x = fecha, y = value)) +
+ geom_line(aes(color = variable), size = 1) +
+ scale_color_OkabeIto() +
+ facet_grid(rows = vars(variable), scales = "free_y")
+```
+
+<br/>
+
+<p class="comment">
+En el gráfico \@ref(fig:gr-05) se observa como se ve la gráfica aplicando el logaritmo.
+No hay evidencia de cambio de varianza, por lo que no creemos que haya necesidad de aplicar el
+logaritmo en este caso. 
+</p>
+
+## Diferencias
+
+
+```{r, nd}
+autos |> 
+ features(value, features = list(unitroot_ndiffs,
+                                 unitroot_nsdiffs)) |> 
+ tabla("Diferencias")
+```
+
+</br>
+
+<p class="comment">
+Vemos en la tabla \@ref(tab:nd) que se requieren 2 diferencias para que los datos de comercio
+sean estacionarios.  Una diferencia estacional yuna primera diferencia. También vemos que se
+requiere al menos una diferencia estacional.  Auque se sugiere que cuando $F_{s} \leq 64$ no
+es necesario aplicar una diferencia estacional, sin embargo, la aplicaremos e iremos
+evaluando.
+</p>
+
+
+```{r}
+autos_diff <- autos |> 
+ mutate(diff_estacional = difference(value, lag = 4), # son datos trimestrales
+        primera_diff = difference(diff_estacional, lag = 1))
+```
+
+```{r, pdf}
+autos_diff |> slice(1:20) |> tabla("Diferencia estacional y primera diferencia")
+```
+
+</br>
+
+<p class="comment">
+En la tabla \@ref(tab:pdf) vemos los resultados de la diferencia estacional aplicada al
+logaritmo de los valores y luego vemos una primera diferencia aplicada a la diferencia
+estacional.  Este procedimiento es lo mismo que si hubiéramos aplicado el método:
+</p>
+
+
+</br>
+
+<div align="center">
+`r coloring_font("**<tt>diff(diff(autos, lag = 12), lag = 1)</tt>**", color = "blue")`
+</div>
+
+</br>
+
+Veamos si con esta primer diferencia, posterior a la diferenciación estacional es suficiente:
+
+
+```{r}
+autos_diff |> 
+ features_at(.vars = vars(diff_estacional, primera_diff), 
+             features = list(unitroot_ndiffs,
+                             unitroot_nsdiffs)) |> 
+ pivot_longer(everything(), 
+              names_to = c("var","stat"),
+              names_pattern = "(.*)_(.*)",
+              values_to = "valores") |> 
+ pivot_wider(names_from = stat, values_from = valores) |> 
+ tabla("La serie ya es estacionaria")
+```
+
+</br>
+
+<p class="comment">
+Vemos que la serie es estacionaria hasta después de aplicar la diferencia estaciona y la
+primera diferencia, es decir, no se vuelve completamente estacional **hasta que se haya
+realizado una primera diferencia.**
+</p>
+
+(ref:gr-06) Comportamiento de la serie después de aplicar diferencia estacional y primera diferencia.
+
+```{r, gr-06, fig.cap='(ref:gr-06)'}
+autos_diff |> 
+ pivot_longer(cols = value:primera_diff, names_to = "diferencias", values_to = "valor") |> 
+ mutate(diferencias = factor(diferencias, levels = c("value", "diff_estacional", "primera_diff"))) |> 
+ ggplot(aes(x = fecha, y = valor)) + geom_line() +
+ facet_grid(rows = vars(diferencias), scales = "free_y") +
+ labs(title = "Estacionarizar la serie")
+```
+
+<br/>
+
+En el gráfico \@ref(fig:gr-06) se observa la serie original, la serie con una diferencia
+estacional y la serie con una primera diferencia.
+
+
+# Modelado
+
+```{r}
+gg_tsdisplay(autos_diff, primera_diff, plot_type = "partial") +
+ labs(title = "Doble diferenciación")
+```
+`
+
+
+<p class="comment">
+El pico significativo en el retardo 1 en el ACF sugiere un componente no-estacional MA(1).
+El pico significativo en el retardo 4 en el ACF sugiere un componente estacional MA(1).
+Comencemos con un modelo ARIMA(0, 1, 1)(0, 1, 1)[4] indicando una primera diferencia, una
+diferencia estacional, y componentes MA(1) no-estacional y MA(1) estacional. Si hubiéramos
+empezado con el PACF, podríamos haber seleccionado un modelo ARIMA(1, 1, 0)(0, 1, 1)[4],
+utilizando el PACF para seleccionar la parte no-estacional del modelo y el ACF para
+seleccionar la parte estacional.
+</p>
+
+</br>
+
+## Auto ARIMA
+
+Con base a lo anterior, vamos a utilizar **todo** el conjunto de datos para encontrar el
+mejor modelo con `auto.arima()` y posteriormente realizaremos validación cruzada para
+evaluar su capacidad predictiva.
+
+Realizaremos el ajuste considerando los modelos observados para luego dejar que la función
+`auto.arima()` busque de forma exhaustiva colocando los parámetros `stepwise = FALSE`,
+`approximation = FALSE` y `greedy = FALSE` para que realice una búsqueda profunda.
+
+
+`r resaltar("Será necesario ajustar modelos alternativos:")`
+
+```{r}
+fit <- autos |> 
+ model(arima011011 = ARIMA(value ~ pdq(0, 1, 1) + PDQ(0, 1, 1)),
+       arima100011 = ARIMA(value ~ pdq(1, 1, 0) + PDQ(0, 1, 1)),
+       auto  = ARIMA(value, stepwise = FALSE, approximation = FALSE, greedy = FALSE))
+```
+
+Veamos el resultado del ajuste en formato *tidy*:
+
+```{r, paged.print = FALSE}
+fit |>
+ pivot_longer(everything(),
+              names_to  = "modelo",
+              values_to = "orden")
+```
+
+Vemos tres modelos candidatos.
+
+A continuación, utilizaremos una función que nos permitirá extraer tanto la bondad de
+ajuste como los parámetros de los modelos:
+
+```{r}
+c(t1, t2) %<-% ajustar_modelos(fit, fun_list)
+```
+
+Comencemos viendo la bondad de ajuste de los modelos:
+
+```{r, mejoraic}
+t2 |> tabla("Bondad de ajuste")
+```
+
+</br>
+
+<p class="comment">
+En la tabla \@ref(tab:mejoraic) vemos que de los tres modelos ajustados, todos tienen un
+AICc bastante similar, siendo el modelo elegido automáticamente un poco mejor que los que
+intentamos determinar.  **El modelo con menor AICc es el modelo determinado por la función
+ARIMA llamado "auto".**
+</p>
+
+Guardemos el nombre de este modelo en un objeto para utilizarlo posteriormente:
+
+```{r}
+best_gof_model <- t2 |> 
+ slice_min(order_by = AICc) |> 
+ pull(.model)
+```
+
+```{r}
+best_gof_model
+```
+
+# Interpretación
+
+`r resaltar("¿coincide con tus modelos candidatos?")`
+
+<p class="comment">
+**No**, el mejor modelo no coincide con mis modelos candidatos. El modelo automático considera
+tres retardos significativos en el ACF, sin embargo, solo se aprecian dos.  Incluso aunque
+grafiquemos con un `lag_max = 50`. Aunque el retardo 2 está muy cerca del límite de confianza.
+En la gráfica \@ref(fig:gr-07) vemos el ACF con más definición y los  patrones estacionales
+son ligeramente más claros.
+</p>
+
+
+(ref:gr-07) Vista de ACF a mayores retardos
+
+```{r, gr-07, fig.cap='(ref:gr-07)'}
+ACF(autos_diff, primera_diff, lag_max = 50) |> 
+	autoplot()
+```
+
+<br/>
+
+`r resaltar("¿Qué tipo de modelo has obtenido?")`
+
+<p class="comment">
+El modelo obtenido por la función auto.arima es un **ARIMA(0,1,3)(0,1,1)[4]**, lo que
+significa que se identificó una componente no estacional MA(3) y un componente estacional
+MA(1).
+</p>
+
+
+# Residuos
+
+Se debe revisar si los residuos no están correlacionados. Los residuos deben tener media
+cero.
+
+Verificar estas propiedades es importante para ver si un método está utilizando toda la
+información disponible, **pero no es una buena forma de seleccionar un método de pronóstico.**
+
+Realicemos un diagnóstico del mejor modelo obtenido con auto.arima para que después lo
+podamos comparar con validación cruzada.
+
+(ref:gr-08) Análisis de residuos
+
+```{r, gr-08, fig.cap='(ref:gr-08)'}
+fit |> 
+ select(all_of(best_gof_model)) |> 
+ gg_tsresiduals(lag = 36) +
+ labs(title = "Análisis de residuos")
+```
+
+<br/>
+
+<p class="comment">
+En el gráfico \@ref(fig:gr-08) se observa que el modelo genera pronóstico que parece tomar en
+cuenta toda la información disponible. La media de los residuos es cercana a cero y no existe
+una correlación significativa en la serie de residuos. El histograma sugiere que los residuos
+pueden no ser normales: la cola de la derecha parece un poco larga. En consecuencia los
+pronósticos de este método probablemente serán bastante buenos, pero los intervalos de
+predicción que se calculan asumiendo una distribución normal pueden ser inexactos. **Una manera
+de mitigar el tener residuos No-Gausianos es utilizar un *bootstraped forecast interval*.
+Esto lo adicionaremos como parámetro en la sección de Predicciones.**
+</p>
+
+## Prueba Portmanteau
+
+Para data no-estacional el tamaño del lag se sugiere $\ell = 10$. En el caso de data
+estacional sería $\ell = 2m$ donde $m$ es el periodo estacional.
+
+En esta caso $\ell = 2 \ast 4$
+
+Los grados de libertad se definen como la cantidad de parámetros que estimó el modelo. Podemos
+obtener esto de siguiente forma:
+
+```{r}
+grados_libertad <- fit |> 
+ select(all_of(best_gof_model)) |> 
+ report() |> coef() %$% length(term)
+```
+
+```{r}
+retardos <- fit %>% select(all_of(best_gof_model)) |> 
+ map_dbl(pluck, 1, "fit", "spec", "period") |> 
+ as.integer() * 2
+```
+
+```{r}
+retardos
+grados_libertad
+```
+
+```{r}
+augment(fit) |> 
+ filter(.model == best_gof_model) |> 
+ features(.innov, ljung_box, lag = retardos, dof = grados_libertad) |> 
+ tabla(cap = "Los residuos son ruido blanco")
+```
+
+
+</br>
+
+<p class="comment">
+El p-valor grande confirma que los residuos son similares al ruido blanco.
+</p>
+
+# Validación Cruzada
+
+A continuación, comparamos la precisión obtenida a través de la validación cruzada de series
+temporales con la precisión residual. La función `stretch_tsibble()` la usaremos para crear
+muchos conjuntos de entrenamiento. En este caso, comenzaremos con un conjunto de
+entrenamiento de longitud `.init = 3`  y aumentamos el tamaño de los conjuntos de
+entrenamiento sucesivos en `.step = 1.`
+
+
+```{r, cache=TRUE}
+autos_tr <- autos |> 
+ stretch_tsibble(.init = 3, .step = 1)
+```
+
+```{r}
+autos_tr %>% glimpse()
+```
+
+Vemos ahora que el objeto `r coloring_font("**autos**", "#93330E")` el cual tiene originalmente
+64 observaciones, ahora, posterior a la preparación, observamos que tiene 2,077 registros.
+
+A continuación, lo que haremos será evaluar con validación cruzada cual es el valor de RMSE
+para un horizonte de 5 años. Esta será una forma más precisa de comprobar cuál es el mejor
+modelo.  Usaremos el modelo que nos indicó auto.arima y lo compararemos con el que
+seleccionamos de forma manual y que obtuvo el segundo mejor puntaje de AICc.
+
+```{r, cache=TRUE}
+tic()
+fc <- autos_tr |> 
+ model(auto   = ARIMA(value ~ pdq(0, 1, 3) + PDQ(0, 1, 1)),
+       manual = ARIMA(value ~ pdq(1, 1, 0) + PDQ(0, 1, 1))) |> 
+ forecast(h = 5) |> 
+ group_by(.id, .model) |> 
+ mutate(h = row_number()) |> 
+ ungroup() |> 
+ as_fable(response = "value", distribution = value) |> 
+ accuracy(autos, by = c("h", ".model")) |> 
+ select(h, .model, RMSE) |> 
+ rename(modelo = .model)
+toc()
+```
+
+```{r compc}
+fc |> 
+ pivot_wider(names_from = modelo, values_from = RMSE) |> 
+ mutate(mejor_modelo = case_when(
+  auto < manual ~ "auto",
+  TRUE ~ "manual" )) |> 
+ tabla("Comparación de modelos con base a su RMSE")
+```
+
+</br>
+
+<p class="comment">
+En la tabla \@ref(tab:compc) vemos cual es el RMSE para cada uno de los dos modelos (columna
+auto y manual). En la columna "mejor modelo" solo validamos quien dio mejor RMSE para cada
+uno de los años.
+</p>
+
+(ref:gr-10) RMSE para un pronóstico a 5 años
+
+```{r, gr-10, fig.cap='(ref:gr-10)'}
+fc |>
+ ggplot(aes(x = h, y = RMSE)) +
+ geom_point(aes(color = modelo), size = 5)
+```
+
+<br/>
+
+<p class="comment">
+En el gráfico \@ref(fig:gr-10) y en la tabla \@ref(tab:compc) **se observa que el mejor
+modelo con base a RMSE es el modelo automático seleccionado por la función auto.arima.** En
+el año 1 ambos modelos tienen un RMSE bastante similar.
+</p>
+
+
+# Predicciones
+
+(ref:gr-09) Pronóstico del índice comercial  utilizando un modelo ARIMA(0, 1, 3)(0, 1, 1)[4]. Se muestran los intervalos del 80% y 95%.
+
+```{r, gr-09, fig.cap='(ref:gr-09)'}
+tic()
+forecast(fit, h = 15, bootstrap = TRUE) %>% # aplicamos bootstrap
+ filter(.model == best_gof_model) %>%
+ autoplot(autos, show_gap = F) +
+ labs(title = "Predicción a 5 años (60 meses - 15 cuartos)",
+      y = "Índice comercial")
+toc()
+```
+
+<br/>
+
+# Coeficientes
+
+```{r, coef}
+t1 |> tabla("Coeficientes")
+```
+
+</br>
+
+<p class="comment">
+No se observa que el modelo "auto" tenga un intercepto.  Vemos que el modelo tiene 4
+parámetros, de los cuales uno de estos es un proceso MA(1) estacional. (sma1)
+</p>
+
+# Conclusiones
+
+`r resaltar("Las previsiones parecen razonables")`
+
+<p class="comment">
+En el gráfico \@ref(fig:gr-09) se observa la linea azul la cual representa la predicción
+de nuestro modelo. Aquí estamos utilizando el modelo que nos entregó un mejor RMSE con
+cross-validación.  En la tabla \@ref(tab:coef) vemos los coeficientes de los modelos.
+El modelo logra capturar los patrones de comportamiento que traía la serie, en especial
+la tendencia a la baja.
+</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
