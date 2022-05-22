@@ -6,8 +6,68 @@
 # lenguaje natural, necesitamos alguna forma de representar el texto sin
 # procesar como números para que podamos realizar cálculos sobre ellos.
 
-pacman::p_load(tokenizer, tidytext, hcandersenr, tidyverse)
+library(tokenizers)
+library(tidytext)
+library(hcandersenr)
 
+import::from(magrittr, "%T>%", "%$%", .into = "operadores")
+import::from(lubridate, .except = c("intersect", "setdiff", "union"))
+pacman::p_load(janitor, SnowballC, tidyverse)
+
+options(pillar.sigfig    = 5,
+		  tibble.print_min = 10,
+		  scipen = 999,
+		  digits = 7,
+		  readr.show_col_types = FALSE,
+		  dplyr.summarise.inform = FALSE)
+
+#   ____________________________________________________________________________
+#   Contenido                                                               ####
+
+
+# tokenización,
+# Remover stop words
+# stemming
+# lematización
+
+# incrustaciones de palabras: Las incrustaciones de palabras son un tipo de
+# representación de palabras que permite que las palabras con un significado
+# similar tengan una representación similar. Son una representación distribuida
+# de texto que es quizás uno de los avances clave para el rendimiento
+# impresionante de los métodos de aprendizaje profundo en problemas desafiantes
+# de procesamiento del lenguaje natural.
+ 
+# tf-idf : Esta estadística mide la frecuencia de un término ajustado por la
+# poca frecuencia con que se usa, y es un ejemplo de un esquema de ponderación
+# que a menudo puede funcionar mejor que los recuentos para el modelado
+# predictivo con características de texto. Densidad de palabras claver.
+
+# TF (Term Frequency): Frecuencia de términos. Es la cantidad de veces que un
+# término aparece en un documento.
+
+# IDF (Inverse Document Frequency): Frecuencia inversa de documento: Su efecto
+# es disminuir el peso de aquéllos términos que se repiten mucho en el total
+# de los documentos y otorga mayor valor a las palabras menos frecuentes.
+
+# Supón que estás leyendo un documento de 100 palabras dónde la palabra «playa»
+# aparece 3 veces.
+# 
+# TF = 3/100 = 0.03
+
+# ln(n_documentos / n_documentos_conteniendo el término)
+# 
+# se encuentran 10 millones de documentos y la palabra <<playa>> supongamos
+# aparece en 1000
+# 
+# idf = log(10,000,000/1000) = 4
+
+# tf x idf 
+# 
+# 0.03 * 4 = 0.12
+
+
+##  ............................................................................
+##  Tokenización                                                            ####
 
 the_fir_tree <- hcandersen_en %>%
 	filter(book == "The fir tree") %>%
@@ -47,34 +107,247 @@ tft_token_characters <- tokenize_characters(x = the_fir_tree,
 														  simplify = FALSE)
 
 
+# veamos cuales son las palabras más usada en cada cuento
+hcandersen_en |> 
+ filter(book %in% c("The fir tree", "The little mermaid")) |> 
+ unnest_tokens(output = word, input = text) |> 
+ count(book, word) |> 
+ group_by(book) |> 
+ arrange(desc(n)) |> 
+ slice(1:5)
+
+# las 5 palabras más comunes en cada cuento de hada son poco informativas, con
+# la excepción de "tree".
+
+# a estas palabras poco informativas son llamadas stop_words
+
+## Tokenizar con n-grams
+
+# Un n-grama (a veces escrito "ngrama") es un término en lingüística para una
+# secuencia contigua de n elementos de una secuencia dada de texto o discurso.
+# El elemento puede ser fonemas, sílabas, letras o palabras según la aplicación,
+# pero cuando la mayoría de la gente habla de n-gramas, se refiere a un grupo de
+# n palabras. En este libro, usaremos n-grama para denotar n-gramas de palabras
+# a menos que se indique lo contrario.
+
+# unigrama: "hello,", "day", "little"
+# bigrama: "fir tree", "fresh air" "Robin Hood"
+# trigram: "You and I"
+ 
+# Los n-grams son frases. fácil!
+
+ 
+
+
+tft_token_ngram <- tokenize_ngrams(x = the_fir_tree,
+											  lowercase = TRUE,       # regresar en minúsculas
+											  n = 3L,                   # el nivel de n-gram (trigrams)
+											  n_min = 3L,              # número mínimo de n-gram
+											  stopwords = character(),
+											  ngram_delim = " ",
+											  simplify = FALSE)
+
+
+tft_token_ngram[[1]]
+
+# Es importante elegir el valor correcto para n al usar n-gramas para la #
+# pregunta que queremos responder
+
+# nos interesa capturar el orden de las palabras
+
+add_paragraphs <- function(data) {
+	pull(data, text) %>%
+		paste(collapse = "\n") %>%
+		tokenize_paragraphs() %>%
+		unlist() %>%
+		tibble(text = .) %>%
+		mutate(paragraph = row_number())
+}
+
+library(janeaustenr)
+
+northangerabbey_paragraphed <- tibble(text = northangerabbey) |> 
+ mutate(chapter = cumsum(str_detect(text, "^CHAPTER "))) |> 
+ filter(chapter > 0, !str_detect(text, "^CHAPTER ")) |> 
+ nest(data = text) |> 
+ mutate(data = map(data, add_paragraphs)) |> 
+ unnest(cols = c(data))
+
+
+# ahora convertir the_fir_tree de un vector con una línea por elemento a un
+# vector con una oración por elemento.
+
+the_fir_tree_sentences <- the_fir_tree |> 
+ paste(collapse = " ") |> 
+ tokenize_sentences()
+
+head(the_fir_tree_sentences[[1]])
+
+# ahora convertiremos a una oración por elemento
+hcandersen_senteces <- hcandersen_en |> 
+ nest(data = text) |> 
+ mutate(data = map_chr(data, ~ paste(.x$text, collapse = " "))) |> 
+ unnest_sentences(sentences, data)
+
+# ¿Dónde falla la tokenización?
+
+l <- "Don’t forget you owe the bank $1 million for the house."
+
+# vemos que elimina el signo de dolar
+tokenize_words("$1")
+
+tokenize_words("$1", strip_punct = FALSE)
+
+# si removemos el punto al final no será posible encontrar la última palabra
+# al utilizar n-gramas.
+
+
+letter_tokens <- str_extract_all(
+	string = "This sentence include 2 numbers and 1 period.",
+	pattern = "[:alpha:]{1}"
+)
+
+letter_tokens
+
+# palabras con guiones
+
+str_split("This isn't a sentence with hyphenated-words.", "[:space:]")
+
+str_split("This isn't a sentence with hyphenated-words.", "[:space:]") %>%
+	map(~ str_remove_all(.x, "^[:punct:]+|[:punct:]+$"))
+
+# solo nos devuelve las palabras que tiene un guion
+str_extract_all(
+	string = "This isn't a sentence with hyphenated-words.",
+	pattern = "[:alpha:]+-[:alpha:]+"
+)
+
+# le agregamos el signo de ? para que incluya el resto.
+str_extract_all(
+	string = "This isn't a sentence with hyphenated-words.",
+	pattern = "[:alpha:]+-?[:alpha:]+"
+)
+
+
+str_extract_all(
+	string = "This isn't a sentence with hyphenated-words.",
+	pattern = "[[:alpha:]']+-?[[:alpha:]']+"
+)
+
+str_extract_all(
+	string = "This isn't a sentence with hyphenated-words.",
+	pattern = "[[:alpha:]']+-?[[:alpha:]']+|[:alpha:]{1}"
+)
 
 
 
+##  ............................................................................
+##  Stop words                                                              ####
 
 
 
+length(stopwords(source = "smart"))
+length(stopwords(source = "snowball"))
+length(stopwords(source = "stopwords-iso"))
+
+
+stopwords(language = "es", source = "snowball")
 
 
 
+##  ............................................................................
+##  Remover stop words                                                      ####
+
+fir_tree <- hca_fairytales() %>%
+	filter(book == "The fir tree",
+			 language == "English")
+
+
+tidy_fir_tree <- fir_tree %>%
+	unnest_tokens(word, text)
+
+
+# Usemos la lista de palabras vacías de Snowball como ejemplo. Dado que las
+# palabras vacías regresan de esta función como un vector, usaremos filter().
+ 
+
+tidy_fir_tree %>%
+	filter(!(word %in% stopwords(source = "snowball")))
 
 
 
+##  ............................................................................
+##  Stemming                                                                ####
 
 
+# cuando tenemos dos versiones de una palabra base a menudo se llama stem (raíz)
+
+tidy_fir_tree <- fir_tree %>%
+ unnest_tokens(word, text) %>%
+ anti_join(get_stopwords())
+
+# esta librería es para palabras parecidas
+library(SnowballC)
+
+tidy_fir_tree %>%
+ mutate(stem = wordStem(word)) %>%
+ count(stem, sort = TRUE)
+
+# Lo alentamos a pensar en la lematización como un paso de preprocesamiento en
+# el modelado de texto, uno que debe pensarse y elegirse (o no) con buen juicio.
+
+# Stemming reduce el espacio de características de los datos de texto.
+
+# Lematizar implica estandarizar, desambiguar, segmentar y, en caso de usar
+# programas de lematización automática, también etiquetar.1​
+
+# Hay otra opción para normalizar palabras a una raíz que adopta un enfoque
+# diferente. En lugar de usar reglas para reducir las palabras a sus raíces, la
+# lematización utiliza el conocimiento sobre la estructura de un idioma para
+# reducir las palabras a sus lemas, las formas canónicas o de diccionario de las
+# palabras.
 
 
+##  ............................................................................
+##  Incrustación de palabras                                                ####
+
+ # algunos algoritmos pueden beneficiarse de las características de memoria de
+ # las matrices dispersas (ej. regresión regularizada). Los algoritmos basados
+ # en árboles no se desempeñan mejor con matrices dispersas (escasas).
+
+ # el objetivo es reducir la cantidad de dimensiones que representan datos
+ # de texto.
+
+ # Las incrustaciones de palabras son una forma de representar datos de texto
+ # como vectores de números basados en un gran corpus de texto, capturando el
+ # significado semántico del contexto de las palabras.
 
 
+ complaints <- read_csv("./09_redes_neuronales/complaints.csv.gz")
+
+ # Vamos a crear una matriz dispersa, donde los elementos de la matriz son los
+ # recuentos de palabras en cada documento.
+ 
+quejas <- complaints |> 
+ unnest_tokens(word, consumer_complaint_narrative) |> 
+ anti_join(get_stopwords(), by = "word") %>%
+ mutate(stem = wordStem(word)) %>%
+ count(complaint_id, stem) %>%
+ cast_dfm(complaint_id, stem, n)
 
 
+# Una matriz dispersa es una matriz donde la mayoría de los elementos son cero.
+# Cuando trabajamos con datos de texto, decimos que nuestros datos son "escasos"
+# porque la mayoría de los documentos no contienen la mayoría de las palabras,
+# lo que da como resultado una representación de casi todos los ceros. Existen
+# estructuras de datos especiales y algoritmos para tratar con datos dispersos
+# que pueden aprovechar su estructura. Por ejemplo, una matriz puede almacenar
+# de manera más eficiente las ubicaciones y los valores de solo los elementos
+# distintos de cero en lugar de todos los elementos.
 
-
-
-
-
-
-
-
+# Las incrustaciones de palabras son una forma de representar datos de texto
+# como vectores de números basados en un gran corpus de texto, capturando el
+# significado semántico del contexto de las palabras.
 
 
 

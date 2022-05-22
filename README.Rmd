@@ -1,0 +1,46 @@
+---
+output: github_document
+---
+
+<!-- README.md is generated from README.Rmd. Please edit that file -->
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+# Neural Networks
+show_engines("mlp")
+Single layer neural network (mlp): https://bit.ly/37mJdnu
+Multilayer perceptron via nnet: https://bit.ly/3MTZqQj
+Multilayer perceptron via brulee: https://bit.ly/3FmrFoe
+Multilayer perceptron via keras: https://bit.ly/394Nmx6
+Tensorflow: https://bit.ly/37nXXmf
+
+# conda neural
+conda search python
+conda create -n neural python=3.10.4
+conda activate neural
+pip install --upgrade pip
+pip install tensorflow
+conda install pytorch torchvision torchaudio cudatoolkit=11.6 -c pytorch-nightly
+
+# tidymodels
+## objetos de tipo workflow_set
+	extract_workflow_set_result(id)
+	extract_preprocessor()
+	extract_spec_parsnip()
+	extract_fit_engine():             usar solo cuando hayas aplicado `fit` al modelo
+	extract_mold()                    usar solo cuando hayas aplicado `fit` al modelo
+	extract_recipe()                  usar solo cuando hayas aplicado `fit` al modelo
+	extract_workflow()
+	
+	
+
+	
+	
+	
+	
+	
