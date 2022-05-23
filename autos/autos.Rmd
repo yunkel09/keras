@@ -1,0 +1,390 @@
+---
+title: Redes Neuronales - Autos
+subtitle: Ejercicio Obligatorio
+author:
+- name: William Chavarría
+  affiliation: Máxima Formación
+  email: wchavarria@tigo.com.gt
+date: '`r format(Sys.Date())`'
+output: 
+  bookdown::html_document2:
+    toc: true
+    toc_float: true
+    highlight: pygments
+    theme: spacelab
+    css: custom.css
+    fig_caption: true
+    df_print: paged
+bibliography: [paquetes_autos.bib, autos.bib]
+biblio-style: "apalike"
+link-citations: true
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo        = TRUE, 
+                      include     = TRUE,
+                      cache       = FALSE,
+                      fig.align   = 'center',
+                      message     = FALSE,
+                      warning     = FALSE, 
+                      comment     = NA, 
+                      highlight   = TRUE,
+                      strip.white = TRUE,
+                      dev         = "svglite",
+                      fig.width   = 8,
+                      fig.asp     = 0.618,
+                      fig.show    = "hold",
+                      fig.align   = "center")
+```
+
+# autos {.tabset .tabset-fade .tabset-pills}
+
+## Descripción
+
+Analiza el consumo de gasolina para 392 vehículos según sus características. Los
+datos se encuentran en el objeto Auto del paquete ISLR y fueron utilizados en
+1983 en la American Statistical Association Exposition.
+
+Realice los siguientes pasos:
+
+1. Observa y grafica los datos. 
+2. Transforma los datos cuando sea necesario. 
+3. Divide el conjunto de datos en uno de entrenamiento y otro de prueba. 
+4. Construye el modelo NN, grafica e interpreta el resultado. 
+5. Evalúa la performance del modelo NN. 
+
+Interprete los resultados. Los datos se encuentran dentro de la librería
+kernlab que debemos instalar (install.packages()) y cargar (library()). Para
+cargar los datos se debe utilizar data(autos).
+
+## Paquetes
+
+```{r}
+options(warn = -1,
+		  dplyr.summarise.inform = FALSE,
+		  tibble.print_min = 5,
+		  readr.show_col_types = FALSE)
+```
+
+```{r}
+import::from(magrittr, "%T>%", "%$%",  "%<>%", .into = "operadores")
+import::from(cowplot, .except = "stamp")
+import::from(kableExtra, .except = "group_rows")
+import::from(DataExplorer, plot_intro, plot_bar, plot_density)
+import::from(parallel, detectCores, makePSOCKcluster, stopCluster)
+import::from(doParallel, registerDoParallel)
+import::from(conectigo, cargar_fuentes)
+import::from(colorblindr, scale_color_OkabeIto)
+import::from(GGally, ggpairs, wrap)
+import::from(janitor, make_clean_names, clean_names)
+pacman::p_load(pins,
+					inspectdf,
+					skimr,
+					finetune,
+					parsnipExtra,
+					tensorflow,
+					keras,
+					tictoc,
+					tidymodels,
+					tidyverse)
+```
+
+## Funciones
+
+```{r}
+tabla <- function(df, cap = "prueba") {
+  
+  df %>% 
+   kbl(booktabs = TRUE, caption = cap, escape = F) %>% 
+   kable_paper(lightable_options = "hover", full_width = F)}
+```
+
+```{r}
+resaltar <- function(texto) {
+    
+    glue::glue("<span style='background-color: #FFFF00'>**{texto}**</span>")
+    
+}
+```
+
+```{r}
+rlt <- function(texto, color) {
+    
+	a <- "<span style='background-color: "
+	b <- "'>"
+	c <- "</span>"
+	t <- str_c("**", texto, "**")
+	
+	f <- str_c(a, color, b)
+   
+	glue::glue(f, t, c) 
+	
+    
+}
+```
+
+```{r}
+# detener el backend
+unregister <- function() {
+  env <- foreach:::.foreachGlobals
+  rm(list=ls(name=env), pos=env)
+}
+```
+
+```{r}
+# resumir estadísticos principales
+resumir <- function(.df) {
+ my_skim <- skim_with(
+  base = NULL,
+  numeric = sfl(media   = ~ mean(., na.rm = TRUE),
+                mediana = ~ median(., na.rm = TRUE),
+                maximo  = ~ max(., na.rm = TRUE),
+                minimo  = ~ min(., na.rm = TRUE)), append = F)
+ my_skim(.df) |>
+ rename_with(~ str_replace_all(.x, "numeric\\.", "")) |>
+ as_tibble() |>
+ rename(tipo = skim_type, variable = skim_variable) |> 
+ clean_names()
+}
+
+```
+ 
+```{r, include=FALSE}
+# colorear fuente
+colf <- function (x, color) {
+   
+	t <- str_c("**", x, "**")
+	paste("<font color='", color, "'>", t, "</font>", sep = "")
+	
+}
+``` 
+ 
+```{r}
+barra <- function(df, x) {
+	
+	dfx <- df %>%
+		tabyl({{x}}) %>% 
+		adorn_pct_formatting()
+	
+	dfx %>% 
+		ggplot(aes(y = {{x}}, x = n)) +
+		geom_col(fill = "#0072B2", width = 0.8) +
+		geom_text(aes(label = str_c(n, " ", "(", percent, ")")),
+					 hjust = 1.5,
+					 size = 6,
+					 color = "white") +
+					 # fontface = "bold") +
+		scale_x_continuous(name = NULL, expand = c(0, 0)) +
+		scale_y_discrete(name = NULL, expand = c(0, 0.5)) +
+		# coord_cartesian(clip = "off") +
+		theme_minimal_vgrid(font_family = "yano") +
+		theme(axis.text.y = element_text(size = 14),
+				plot.title = element_text(size = 22, face = "bold"))
+}
+```
+
+## Opciones
+
+```{r}
+set.seed(2022)
+```
+
+```{r}
+colorx <- c(rojo = "#F4354D", amarillo = "#FCA108", verde = "#00AB40")
+```
+
+
+```{r}
+cargar_fuentes()
+```
+
+```{r}
+yunkel <- theme_cowplot(font_family = "yano") +
+	       theme(plot.margin = unit(c(3, 1, 1, 1), "mm"), 
+	             axis.title = element_text(size = 12))
+```
+
+```{r}
+# tema con grid horizontal y vertical
+drako <- theme_bw(base_family = "yano", base_size = 14) +
+	      theme(plot.margin = unit(c(6, 1, 1, 1), "mm"),
+	            axis.title = element_text(size = 12),
+	            plot.subtitle = element_text(size = 8,
+                                            family = "sans"))
+```
+
+```{r}
+# tema para histogramas binned
+furia <- yunkel +
+ theme(axis.line = element_blank(),
+       panel.grid.major.y = element_line(color = "#e5e5e5"))
+```
+
+```{r}
+ver <- . %>% prep() %>% juice()
+```
+
+```{r}
+theme_set(yunkel)
+```
+
+# Carga
+
+Cargar los datos y transformar aquellas variables que se consideren factor.
+
+```{r}
+autos_raw <- ISLR::Auto |> as_tibble()
+```
+
+
+# Análisis Exploratorio
+
+## Estructura
+
+```{r}
+autos_raw |> sample_n(size = 10) |> 
+	tabla(cap = "Observaciones")
+```
+
+</br>
+
+<p class="comment">
+Se observa que la columna name contiene la marca (*make*), el modelo (*model*) y
+el acabado (*trim*). Podemos extraerlo como parte del *feature engineering* 
+</p>
+
+
+## Feature Extraction
+
+
+
+```{r}
+pro <- autos_raw |> 
+ mutate(across(name, as.character)) |> 
+ separate(name, c("make", "model", "trim"),
+          extra = "drop", fill = "right")
+```
+
+```{r}
+pro |> slice_sample(n = 5) |> tabla(cap = "Missing values en variable trim")
+```
+
+</br>
+
+## Missing Values
+
+```{r}
+pro %>% inspect_na() |> tabla("Valores perdidos")
+```
+
+</br>
+
+Vemos que hay valores perdidos en la columna *trim*
+
+El nivel de equipamiento del modelo **base** de un fabricante de automóviles es
+la versión más simple del nuevo vehículo. Un modelo base representa la variación
+de modelo menos costosa del vehículo que ofrece el fabricante de automóviles.
+**Es posible que el nivel de equipamiento de un modelo base no tenga un nombre
+específico**, pero el mismo modelo de automóvil puede tener varios niveles de
+equipamiento.^[ver https://bit.ly/3wyko1N].  Por esta razón, agregaremos el
+valor "base" a aquellos vehículos que no tengan especificación (NA) en la
+columna *trim.*
+
+
+```{r}
+autos <- autos_raw |> 
+	mutate(across(name, as.character)) |> 
+	separate(name, c("make", "model", "trim"),
+				extra = "drop", fill = "right") |> 
+	mutate(
+		across(trim, replace_na, "base"),
+		across(where(is.character), as.factor))
+```
+
+```{r}
+autos |> slice_sample(n = 10) |> tabla(cap = "Feature Extraction")
+```
+
+
+```{r, include=FALSE}
+# nombres de variables con colores
+w <- names(autos) %>% 
+	set_names(.) %>% 
+	map_chr(~ colf(.x, "#93330E"))
+```
+
+</br>
+
+<p class="comment">
+Hemos sustituidos los `r colf("NA", colorx[["rojo"]])` por **base**.
+</p>
+
+
+```{r}
+autos |>
+	inspect_na() |> 
+	tabla(cap = "Valores perdidos")
+```
+
+</br>
+
+Aun se observan dos valores perdidos. Estos deberán trabajarse en la fase de
+pre-procesamiento.
+
+<br/>
+
+Ahora que ya hemos realizado el *feature extraction*, procedamos a revisar la
+estructura de nuestro dataset
+
+```{r}
+plot_intro(autos, ggtheme = yunkel, title = "Resumen")
+```
+
+<br/>
+
+La mayoría de las columnas son numéricas continuas.
+
+```{r}
+est <- resumir(autos) |> 
+ select(-factor_ordered)
+```
+
+```{r}
+est
+```
+
+</br>
+
+<p class="comment">
+Vemos que las variables recién creadas `r w[9]`, `r w[10]` y `r w[11]` presentan
+una **alta cardinalidad**.  Será necesario aplicar técnicas de codificación un
+poco más avanzadas. En este caso crear variables *dummy* o aplicar *One-Hot
+Encoding* podría crearnos un dataset con alta dimensionalidad (ver maldición de
+la dimensionalidad)^[A medida que crece el número de características, la
+cantidad de datos que necesitamos para poder distinguir con precisión entre
+estas características (para darnos una predicción) y generalizar nuestro modelo
+(función aprendida) crece EXPONENCIALMENTE.]
+</p>
+
+## Cardinalidad
+
+(ref:gr-01) Alta cardinalidad
+
+```{r, gr-01, fig.cap='(ref:gr-01)'}
+autos |> select(make:trim) |>
+	inspect_cat() |> 
+	show_plot(high_cardinality = 4, col_palette = 1)
+```
+
+<br/>
+
+En el gráfico \@ref(fig:gr-01) podemos comprobar visualmente que contamos con
+una alta cardinalidad en nuestros features categóricos recién creados.
+
+## Variables dependiente
+
+
+
+# Referencias

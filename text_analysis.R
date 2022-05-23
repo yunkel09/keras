@@ -30,41 +30,8 @@ options(pillar.sigfig    = 5,
 # stemming
 # lematización
 
-# incrustaciones de palabras: Las incrustaciones de palabras son un tipo de
-# representación de palabras que permite que las palabras con un significado
-# similar tengan una representación similar. Son una representación distribuida
-# de texto que es quizás uno de los avances clave para el rendimiento
-# impresionante de los métodos de aprendizaje profundo en problemas desafiantes
-# de procesamiento del lenguaje natural.
+
  
-# tf-idf : Esta estadística mide la frecuencia de un término ajustado por la
-# poca frecuencia con que se usa, y es un ejemplo de un esquema de ponderación
-# que a menudo puede funcionar mejor que los recuentos para el modelado
-# predictivo con características de texto. Densidad de palabras claver.
-
-# TF (Term Frequency): Frecuencia de términos. Es la cantidad de veces que un
-# término aparece en un documento.
-
-# IDF (Inverse Document Frequency): Frecuencia inversa de documento: Su efecto
-# es disminuir el peso de aquéllos términos que se repiten mucho en el total
-# de los documentos y otorga mayor valor a las palabras menos frecuentes.
-
-# Supón que estás leyendo un documento de 100 palabras dónde la palabra «playa»
-# aparece 3 veces.
-# 
-# TF = 3/100 = 0.03
-
-# ln(n_documentos / n_documentos_conteniendo el término)
-# 
-# se encuentran 10 millones de documentos y la palabra <<playa>> supongamos
-# aparece en 1000
-# 
-# idf = log(10,000,000/1000) = 4
-
-# tf x idf 
-# 
-# 0.03 * 4 = 0.12
-
 
 ##  ............................................................................
 ##  Tokenización                                                            ####
@@ -336,14 +303,7 @@ quejas <- complaints |>
  cast_dfm(complaint_id, stem, n)
 
 
-# Una matriz dispersa es una matriz donde la mayoría de los elementos son cero.
-# Cuando trabajamos con datos de texto, decimos que nuestros datos son "escasos"
-# porque la mayoría de los documentos no contienen la mayoría de las palabras,
-# lo que da como resultado una representación de casi todos los ceros. Existen
-# estructuras de datos especiales y algoritmos para tratar con datos dispersos
-# que pueden aprovechar su estructura. Por ejemplo, una matriz puede almacenar
-# de manera más eficiente las ubicaciones y los valores de solo los elementos
-# distintos de cero en lugar de todos los elementos.
+
 
 # Las incrustaciones de palabras son una forma de representar datos de texto
 # como vectores de números basados en un gran corpus de texto, capturando el
@@ -351,7 +311,37 @@ quejas <- complaints |>
 
 
 
+##  ............................................................................
+##  Scotus                                                                  ####
 
+library(scotus)
+
+scotus_filtered |> 
+	as_tibble()
+
+set.seed(1234)
+scotus_split <- scotus_filtered %>%
+	mutate(year = as.numeric(year),
+			 text = str_remove_all(text, "'")) %>%
+	initial_split()
+
+scotus_train <- training(scotus_split)
+scotus_test <- testing(scotus_split)
+
+scotus_train2 <- scotus_train |> sample_n(50)
+
+ver <- . %>% prep() %>% juice()
+
+# soctous_rec <- 
+recipe(year ~ text, data = scotus_train2) |> 
+	# 1: tokenizar (dividir en palabras todo el texto)
+	step_tokenize(text) |>
+	# 2: filtrar para mantener únicamente el top 1000 de tokens por frecuencia
+	step_tokenfilter(text, max_tokens = 1e3) |> 
+	# 3: ponderar cada frecuencia de token por la frecuencia inversa del
+	# documento (tf-idf)
+	step_tfidf(text) |>
+	# 4: centrar y escalar los predictores
 
 
 
