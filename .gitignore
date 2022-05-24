@@ -73,6 +73,7 @@ office365
 *.ttf
 *.eot
 *.svg
+*.rds
 *.emf
 *.PNG
 *.lof
