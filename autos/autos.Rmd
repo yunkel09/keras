@@ -39,7 +39,7 @@ knitr::opts_chunk$set(echo        = TRUE,
                       fig.align   = "center")
 ```
 
-# autos {.tabset .tabset-fade .tabset-pills}
+# Autos {.tabset .tabset-fade .tabset-pills}
 
 ## Descripción
 
@@ -74,19 +74,33 @@ import::from(cowplot, .except = "stamp")
 import::from(kableExtra, .except = "group_rows")
 import::from(DataExplorer, plot_intro, plot_bar, plot_density)
 import::from(parallel, detectCores, makePSOCKcluster, stopCluster)
+import::from(dviz.supp, theme_dviz_open)
 import::from(doParallel, registerDoParallel)
+import::from(DescTools, JarqueBeraTest)
+import::from(weights, rd, starmaker)
+import::from(colorspace, scale_fill_continuous_divergingx)
+import::from(corrplot, corrplot)
+# import::from(bestNormalize, bestNormalize)
+import::from(tidytext, reorder_within, scale_y_reordered, scale_x_reordered)
+import::from(nortest, ad.test, pearson.test, sf.test, lillie.test)
 import::from(conectigo, cargar_fuentes)
-import::from(colorblindr, scale_color_OkabeIto)
+import::from(colorblindr, scale_color_OkabeIto, palette_OkabeIto, scale_fill_OkabeIto)
 import::from(GGally, ggpairs, wrap)
+import::from(patchwork, plot_layout, plot_annotation)
 import::from(janitor, make_clean_names, clean_names)
 pacman::p_load(pins,
+					moments,
+					ggridges,
 					inspectdf,
 					skimr,
 					finetune,
+					bestNormalize,
 					parsnipExtra,
 					tensorflow,
 					keras,
+					embed,
 					tictoc,
+					textrecipes,
 					tidymodels,
 					tidyverse)
 ```
@@ -141,7 +155,9 @@ resumir <- function(.df) {
   numeric = sfl(media   = ~ mean(., na.rm = TRUE),
                 mediana = ~ median(., na.rm = TRUE),
                 maximo  = ~ max(., na.rm = TRUE),
-                minimo  = ~ min(., na.rm = TRUE)), append = F)
+                minimo  = ~ min(., na.rm = TRUE),
+  				    skewness = ~ skewness(.x),
+                kurtosis = ~ kurtosis(.x)), append = F)
  my_skim(.df) |>
  rename_with(~ str_replace_all(.x, "numeric\\.", "")) |>
  as_tibble() |>
@@ -184,6 +200,98 @@ barra <- function(df, x) {
 				plot.title = element_text(size = 22, face = "bold"))
 }
 ```
+
+
+```{r}
+# agregar línea loess a las gráficas ggpairs
+loess_lm <- function(data, mapping, ...){
+ 
+ggplot(data = data, mapping = mapping) + 
+    geom_point(alpha = 0.9) + 
+    stat_smooth(formula = y ~ x, 
+                method = "lm", 
+                se = TRUE, 
+                color = "blue",
+                fill = "blue",
+                size = 0.5, 
+                alpha = 0.2,
+                linetype = "longdash", 
+                ...)
+}
+```
+
+
+```{r}
+# crear qq-plots
+qpl <- function(df, var_y, rel) { 
+      
+      df %>% 
+       ggplot(aes(sample = .data[[var_y]])) +
+       qq$geom_qq_band(bandType = "pointwise", 
+                       distribution = "norm", 
+                       alpha = 0.5) +
+       qq$stat_qq_line() +
+       qq$stat_qq_point(size   = 2, 
+                        shape  = 21, 
+                        alpha  = 0.8, 
+                        fill   = rel, 
+                        colour = rel) +
+       labs(x = "Theoretical Quantiles", y = "Sample Quantiles") +
+       ggtitle(str_to_title(var_y)) +
+       theme(plot.title = element_text(size = 16))
+      
+     }
+```
+
+
+```{r}
+# pruebas de normalidad no paramétrica
+funciones <- list(
+ 
+  shapiro_wilk       = function(x) shapiro.test(x),
+  jarque_bera        = function(x) JarqueBeraTest(x, robust = F),
+  pearson            = function(x) pearson.test(x), 
+  shapiro_francia    = function(x) sf.test(x),
+  kolgomoro_smirnov  = function(x) lillie.test(x)
+)
+```
+
+```{r}
+# aplicar pruebas de normalidad
+probar_normalidad <- function(vector) {
+	
+	funciones %>% 
+		map(exec, x = vector) %>% 
+		map_df(tidy) %>% 
+		select(method, p_value = p.value) %>% 
+		# mutate(normalidad = ifelse(p_value < 0.05, "NO_NORMAL", "NORMAL")) %>% 
+		arrange(desc(p_value))
+}
+```
+
+```{r}
+# generar gráfico de densidad
+estimar_densidad <- function(df, d, color) {
+	
+	brk <- hist(df[[d]], plot = FALSE)$breaks 
+	med <- mean(df[[d]])
+	
+	df %>% 
+	  ggplot(aes(x = .data[[d]], y = ..density..)) +
+	  geom_histogram(fill   = color,
+	                 colour = "black",
+	                 size   = .2,
+	                 breaks = brk) +
+	  scale_x_continuous(name   = d,
+	                     breaks = brk) +
+	  geom_density(size = 1) +
+	  geom_vline(xintercept = med, 
+	             linetype = "dashed",
+	             color = "red", 
+	             alpha = 0.5) 
+}
+```
+
 
 ## Opciones
 
@@ -259,7 +367,6 @@ el acabado (*trim*). Podemos extraerlo como parte del *feature engineering*
 ## Feature Extraction
 
 
-
 ```{r}
 pro <- autos_raw |> 
  mutate(across(name, as.character)) |> 
@@ -292,15 +399,21 @@ equipamiento.^[ver https://bit.ly/3wyko1N].  Por esta razón, agregaremos el
 valor "base" a aquellos vehículos que no tengan especificación (NA) en la
 columna *trim.*
 
+```{r}
+# vector de reemplazo
+mk_00 <- c(`1` = "american",  `2` = "european", `3` = "japanese")
+```
 
 ```{r}
 autos <- autos_raw |> 
-	mutate(across(name, as.character)) |> 
-	separate(name, c("make", "model", "trim"),
-				extra = "drop", fill = "right") |> 
-	mutate(
-		across(trim, replace_na, "base"),
-		across(where(is.character), as.factor))
+ mutate(across(name, as.character)) |> 
+ separate(name, c("make", "model", "trim"),
+          extra = "drop", fill = "right") |> 
+ mutate(
+  across(trim, replace_na, "base"),
+  across(origin, recode, !!!mk_00),
+  across(where(is.character), as.factor),
+  across(c(cylinders, year), as.factor))
 ```
 
 ```{r}
@@ -333,8 +446,6 @@ autos |>
 Aun se observan dos valores perdidos. Estos deberán trabajarse en la fase de
 pre-procesamiento.
 
-<br/>
-
 Ahora que ya hemos realizado el *feature extraction*, procedamos a revisar la
 estructura de nuestro dataset
 
@@ -344,15 +455,44 @@ plot_intro(autos, ggtheme = yunkel, title = "Resumen")
 
 <br/>
 
-La mayoría de las columnas son numéricas continuas.
+La mayoría de las columnas son numéricas continuas. Hay una pequeña cantidad
+de valores perdidos.
 
 ```{r}
-est <- resumir(autos) |> 
- select(-factor_ordered)
+est <- resumir(autos)
 ```
 
 ```{r}
-est
+est_num <- est |> 
+ filter(tipo == "numeric") |> 
+ select(variable, media:kurtosis)
+```
+
+```{r}
+est_fac <- est |>
+ filter(tipo == "factor") |> 
+ select(variable:factor_top_counts)
+```
+
+Veamos un resumen de las variables numéricas:
+
+```{r}
+est_num
+```
+
+<p class="comment">
+Sabemos que el *skewness* en una distribución normal es igual a cero, así que
+valores muy cercanos a cero indican distribuciones simétricas. Con excepción
+de `r w[4]` la mayoría de los predictores (incluyendo la respuesta) se ven
+bastante simétricos.  
+</p>
+
+</br>
+
+Ahora de las categóricas
+
+```{r}
+est_fac
 ```
 
 </br>
@@ -373,7 +513,7 @@ estas características (para darnos una predicción) y generalizar nuestro model
 (ref:gr-01) Alta cardinalidad
 
 ```{r, gr-01, fig.cap='(ref:gr-01)'}
-autos |> select(make:trim) |>
+autos |> select(where(is.factor)) |>
 	inspect_cat() |> 
 	show_plot(high_cardinality = 4, col_palette = 1)
 ```
@@ -383,8 +523,569 @@ autos |> select(make:trim) |>
 En el gráfico \@ref(fig:gr-01) podemos comprobar visualmente que contamos con
 una alta cardinalidad en nuestros features categóricos recién creados.
 
-## Variables dependiente
+## Respuesta
 
+Debido a que el objetivo más importante del modelado es entender la variación en
+la respuesta, el primer paso debería ser entender la distribución de esta.
+
+```{r}
+brk <- hist(autos$mpg, plot = F)$breaks
+res <- resumir(autos$mpg)
+```
+
+```{r}
+autos |> 
+ ggplot(aes(x = mpg, y = ..density..)) +
+ geom_histogram(fill = "#56B4E9", size = .2, breaks = brk, color = "white") +
+ geom_density(size = 1) +
+ geom_vline(xintercept = 0, color = "black", linetype = "dashed") +
+ geom_vline(xintercept = res[["media"]], color = "black", linetype = "dashed") +
+ geom_vline(xintercept = res[["mediana"]], color = "green", linetype = "dashed") +
+ scale_x_continuous(name = "MPG",
+                    expand = c(0, 0),
+                    limits = c(0, 55),
+                    breaks = brk) +
+ labs(title = "Consumo en Millas por Galón") + furia
+```
+
+<p class="comment">
+El histograma muestra un ligero sesgo hacia la derecha, con la media
+desplazándose ligeramente con respecto a la mediana.  Diera la impresión de que
+hay dos picos en la distribución. Todos los valores de `r w[1]` son positivos.
+No se observan valores atípicos.  No podemos concluir visualmente que la
+distribución del a respuesta sea normal.
+</p>
+
+Realizaremos pruebas formales en un apartado posterior
+
+```{r}
+bandwidth <- 2.68
+```
+
+(ref:gr-02) Análisis de la respuesta por año de origen
+
+```{r, gr-02, fig.cap='(ref:gr-02)'}
+autos |> 
+ ggplot(aes(x = mpg, y = year, fill = stat(x))) +
+ geom_density_ridges_gradient(
+ 	scale = 3, rel_min_height = 0.01,
+ 	bandwidth = bandwidth) +
+ scale_fill_viridis_c(option = "C") +
+ scale_x_continuous(name = "MPG", breaks = seq(0, 70, 5)) +
+ scale_y_discrete(name = "Año", expand = c(0, .2, 0, 2.6)) +
+ theme_ridges(font_family = "yano") +
+ labs(title = "MPG por año de origen")
+```
+
+<br/>
+
+<p class="comment">
+En el gráfico \@ref(fig:gr-02) vemos que una explicación razonable para la
+variación en la repuesta es que al pasar los años, el consumo `r w[1]` se fue
+mejorando. Vemos que la diferencia entre la media de `r w[1]` en el año 70 es
+mucho menor que la media en el año 82.
+</p>
+
+## Predictores
+
+```{r}
+autos_n <- autos %>% select(where(is.numeric), -mpg)
+pal    <- palette_OkabeIto[1:ncol(autos_n)]
+ndv    <- rev(names(autos_n))
+```
+
+(ref:densidad) Histograma con densidad
+
+```{r, densidad, fig.cap='(ref:densidad)', fig.width=11, fig.asp=0.7}
+map2(.x = ndv, .y = pal, ~ estimar_densidad(df = autos_n, d = .x, color = .y)) |> 
+ reduce(.f = `+`) + 
+ plot_layout(ncol = 2) +
+ plot_annotation(title    = "Distribución", 
+                 subtitle = "Estimación de densidad no paramétrica") 
+```
+\
+
+En la figura \@ref(fig:densidad) vemos la distribución de los predictores
+numéricos. 
+
+* `r w[6]`: El *skewness* que observamos en el resumen numérico nos confirma lo
+que se aprecia en el gráfico. La distribución se ve bastante simétrica, con una
+*kurtosis* de 3.4^[Una distribución normal tiene una kurtosis de 3].
+
+* `r w[5]`: Es posible que este predictor siga una distribución *log-normal*
+o *gamma*. Habrá que considerarlo en el proceso de transformaciones.
+
+* `r w[4]`: Se ve bimodal y con sesgo positivo.
+
+* `r w[3]`: Al igual que el anterior se ve un decrecimiento exponencial a medida
+que aumentan los valores de la respuesta toma valores más alto.
+
+
+```{r, normalidad}
+autos %>% 
+ select(where(is.numeric)) |> 
+ imap_dfr(~ probar_normalidad(.x) %>%
+ 			mutate(var = .y)) %>% 
+ pivot_wider(names_from = "var", values_from = "p_value") %>% 
+ mutate(across(where(is.numeric), rd, 2)) %>% 
+ tabla(cap = "Pruebas no paramétricas de normalidad")
+```
+\
+
+<p class="comment">
+En la tabla \@ref(tab:normalidad) se realizaron varias pruebas no
+paramétricas y comprobamos que **la variable respuesta no es normal.**. Lo
+mismo para el resto de variables numéricas. Pensamos que la excepción podría
+ser `r w[6]`, sin embargo, ninguna prueba confirma normalidad.
+</p>
+
+## Atípicos
+
+(ref:gr-03) Valores atípicos
+
+```{r, gr-03, fig.cap='(ref:gr-03)'}
+autos_n |> 
+ pivot_longer(cols = where(is.numeric),
+					 names_to = "variable",
+					 values_to = "valor") |> 
+ ggplot(aes(y = valor, x = fct_reorder(variable, valor, .desc = T))) +
+ geom_boxplot(aes(fill = variable), outlier.color = "red") +
+ scale_fill_OkabeIto() +
+ xlab("variable") +
+ scale_y_log10() +
+ theme(legend.position = "none") +
+ labs(title = "Variabilidad y rango de predictores numéricos")
+```
+
+<br/>
+
+<p class="comment">
+En el gráfico \@ref(fig:gr-03) se observa que los predictores numéricos no se
+encuentran en la misma escala, por lo que será necesario realizar *feature
+scaling*. Otra punto interesante es que el feature con menos variación y el que
+más se aproxima a una distribución normal es el que presenta valores atípicos.
+Deberemos revisar estos valores antes de proceder con el modelado.
+</p>
+
+## Categóricas
+
+(ref:gr-04) Recuento variables categóricas
+
+```{r, gr-04, fig.cap='(ref:gr-04)', fig.width=12, fig.height=15}
+plot_bar(autos, by = "origin", 
+			with = "mpg", 
+			by_position = "dodge",
+			ggtheme = yunkel)
+```
+
+<br/>
+
+<p class="comment">
+En el gráfico \@ref(fig:gr-04) se observan las variables categóricas por
+frecuencia. En el caso de las variables `r w[9]`, `r w[10]` y `r w[11]`, a como
+lo observamos al inicio tienen una alta cardinalidad.  Estas variables debemos
+veras con un *cleveland dot plot*.  El aumento y disminución de `r w[1]` es
+con base a la cantidad de cilindros, el año y la marca es un claro indicio de
+que son variables que influyen en la respuesta.
+</p>
+
+(ref:gr-05) MPG por marca
+
+```{r, gr-05, fig.cap='(ref:gr-05)', fig.asp = 1}
+autos |> 
+ group_by(make) |> 
+ summarise(media = mean(mpg), std_err = sd(mpg) / sqrt(length(mpg))) |> 
+ ggplot(aes(x = media, y = fct_reorder(make, media))) +
+ geom_errorbar(aes(xmin = media - 1.64 * std_err, xmax = media + 1.64 * std_err)) + 
+ geom_point(color = "#0072B2", size = 3) +
+ scale_y_discrete(name = NULL) + drako
+```
+
+<br/>
+
+<p class="comment">
+En el gráfico \@ref(fig:gr-05) hay dos cosas importantes que notar. La primera
+es que vemos que hay nombres que no están escritos correctamente. Por ejemplo,
+existe *vokswagen* y *volkswagen*.  Será necesario corregir esto como parte del
+*data cleaning*.  Lo segundo a notar es la variación que tienen algunas marcas
+con respecto al nivel de combustible.
+</p>
+
+```{r}
+autos |> 
+ count(make) |> 
+ arrange(make) |> print(n = Inf)
+```
+
+```{r}
+mk_01 <- c(
+		"chevroelt" = "chevrolet",
+		"maxda"     = "mazda",
+		"toyouta"   = "toyota",
+		"vokswagen" = "volkswagen")
+```
+
+```{r}
+autos %<>% mutate(across(make, recode, !!!mk_01))
+```
+
+<p class="comment">
+Hemos realizado la limpieza de las marcas de vehículos.  También se pudo haber
+realizado un **stemming** en la parte de preprocesamiento, sin embargo, no
+hubiera sido tan óptimo debido a que estas son marcas de vehículos y no palabras
+cotidianas.
+</p>
+
+
+```{r}
+autos_sum <- autos |> 
+ group_by(make) |> 
+ summarise(
+ 	year  = min(as.integer(as.character(year))),
+ 	mpg   = mean(mpg), 
+ 	.groups = "drop")
+```
+
+(ref:gr-06) Heatmap
+
+```{r, gr-06, fig.cap='(ref:gr-06)', fig.asp = 0.9}
+autos_sum |> 
+ mutate(across(year, as.factor)) |> 
+ ggplot(aes(x = year, y = make, fill = mpg)) +
+ geom_tile(color = "white", size = 0.25) +
+ scale_fill_viridis_c(
+    option = "A", begin = 0.05, end = 0.98,
+    limits = c(0, 100),
+    name = "mpg",
+    guide = guide_colorbar(
+      direction = "horizontal",
+      label.position = "bottom",
+      title.position = "top",
+      ticks = FALSE,
+      barwidth = grid::unit(3.5, "in"),
+      barheight = grid::unit(0.2, "in")
+    )) +
+  scale_x_discrete(expand = c(0, 0), name = NULL) +
+  scale_y_discrete(name = NULL, position = "left") +
+  yunkel +
+  theme(
+    axis.line = element_blank(),
+    axis.ticks = element_blank(),
+    axis.ticks.length = grid::unit(1, "pt"),
+    legend.position = "top",
+    legend.justification = "left",
+    legend.title.align = 0.5,
+    legend.title = element_text(size = 12*12/14)
+  )
+```
+
+<br/>
+
+<p class="comment">
+En el gráfico \@ref(fig:gr-06) vemos una relación entre `r w[9]` y `r w[1]`.
+La variación en `r w[1]` se ve afectada por las diferentes marcas. Esto se
+observa a partir de la variación en los colores.  También el año podría ser un
+predictor importante ya que se observa que la tonálidad va aclarándose a medida
+que aumentan los años.
+</p>
+
+## Correlación
+
+(ref:cormatriz) Matriz de correlación
+
+```{r, cormatriz, fig.cap='(ref:cormatriz)'}
+corm <- cor(autos_n)
+corrplot(corr = corm,
+			method = "color",
+			order = "hclust",
+			type = "upper",
+         addCoef.col = "black",
+         outline = F,
+         diag = TRUE, 
+         col = colorRampPalette(c("deepskyblue1","white","indianred3"))(100), 
+         tl.cex = 0.8, number.cex = 1, cl.cex = 1, tl.col = "black", 
+         tl.pos = "td", tl.srt = 45)
+```
+
+```{r}
+caret::findCorrelation(corm, cutoff = 0.75)
+```
+
+(ref:matriz) Gráfico de correlación
+
+```{r, matriz, fig.cap='(ref:matriz)', fig.width=12, fig.asp=0.7}
+autos %>%
+	select(where(is.numeric)) %>% 
+	ggpairs(., lower = list(continuous = loess_lm),
+ 		     upper = list(continuous = wrap("cor", size = 5))) + drako
+```
+\
+<p class="comment">
+Algunos modelos podrían beneficiarse de una decorrelación (eliminar
+colinealidad) de predictores o en palabras más sencillas, cuando dos variables
+predictoras están altamente correlacionadas debemos eliminar una de ellas para
+eliminar información redundante. El alto grado de correlación es un claro
+indicador de que la información presente en los autos es redundante y podría
+eliminarse o reducirse. Esto lo realizaremos en el preprocesamiento.
+</p>
+
+## Asimetría
+
+Trataremos de identificar la mejor transformación para cada predictor utilizando
+la función `step_best_normalize` de [@R-bestNormalize]
+
+```{r}
+autos_transformado <- recipe(mpg ~ ., data = autos) %>%
+    step_best_normalize(all_predictors(), -all_nominal()) %>%  
+    ver() |> 
+	 select(-mpg) |> 
+    rename_with(~ str_c(.x, "_tr"), is.double) %>% 
+    select(where(is.double)) %>% 
+    bind_cols(autos %>% select(where(is.double), -mpg))
+```
+
+```{r}
+autos_transformado %>% 
+    pivot_longer(cols = displacement_tr:acceleration,
+                         names_to = "variable",
+                         values_to = "valores") %>% 
+    ggplot(aes(x = valores, y = ..density..)) +
+    geom_histogram(fill   = "#56B4E9",
+                   colour = "black",
+                   size   = .2) +
+    geom_density(size = 1) +
+    facet_wrap(variable ~ ., scales = "free", ncol = 2) +
+    labs(title = "Predictores Transformados", subtitle = "BestNormalize") +
+    drako
+```
+
+
+# Modelado
+
+## Split
+
+```{r}
+autos_split <- initial_split(autos, prop = 0.8, strata = mpg)
+autos_train <- training(autos_split)
+```
+
+```{r}
+dim(autos_train)
+```
+
+## Cross-validación
+
+```{r}
+autos_folds <- vfold_cv(autos_train, v = 10, strata = mpg)
+```
+
+## Transformaciones
+
+Debido a la alta cardinalidad de los features categóricas, debemos considerar
+cual sería el espacio de features que tendrían que analizar los modelos si
+aplicamos una técnica convencional tal como *One-Hot Encoding* o convertir a
+variables *dummy*.
+
+```{r}
+# contar los valores únicos de los features categóricos
+(com <- autos |> 
+ select(where(is.factor)) |> 
+ map_int(~ length(unique(.x))))
+```
+
+Ahora calculemos las combinaciones posibles:
+
+```{r}
+com |> reduce(`*`)
+```
+
+El resultado de todas las posibles combinaciones es demasiado grande. Nuestras
+transformaciones deben hacer uso de técnicas más apropiadas para el tratamiento
+de esta alta cardinalidad.  
+
+* `step_impute_mode`: Imputaremos los valores perdidos de `r w[10]` utilizando
+la moda.
+
+* `step_best_normalize`: A como lo demostramos en la sección de asimetría. Este
+paso determina la mejor transformación de cada predictor.
+
+* `step_corr`: A como se observó en la sección de *correlación*, hay varios
+predictores con una alta correlación entre ellos. Utilizaremos este filtro para
+eliminar variables que esten muy correlacionadas entre sí.
+
+* `step_unknow`: Le asignará un valor de missing si encuentra una nueva
+categoría. En realidad este paso es innecesario ya que las técnicas para
+codificar variables categóricas ya cuentan con este paso.
+
+* `step_lencode_mixed`: Técnica de *codificación de efecto* en el que el valor
+original de la variable categórica se remplaza con un valor que mide el efecto
+de esos datos. Estos pasos usan un modelo lineal generalizado para estimar el
+efecto de cada nivel en un predictor categórico sobre el resultado. [@R-embed]
+
+* `step_other`: Agrupará valores infrecuentes en las variables categóricas
+dentro de un grupo llamado "otros".  Este *threshold* es *tuneable*. Lo
+aplicaremos únicamente a las variables de mayor cardinalidad.
+
+* `step_dummy_hash`: Aquí aplicaremos *feature hashing*. Esta técnica tiene
+muchas desventajas en cuanto a la interpretabilidad y a los problemas con las
+denominadas colisiones^[ver https://bit.ly/3LHP3hg], sin embargo, como técnica
+de reducción de la dimensionalidad es muy útil ya que podemos definir un
+espacio mucho más pequeño de categorías.
+
+* `step_zv`: Es probable que algunas columnas hash contengan todos ceros, por lo
+que realizaremos un filtro de varianza cero para filtrar dichas columnas.
+
+Presentaremos el siguiente ejemplo solo para que se posible apreciar el dataset
+transformado. 
+\
+ 
+```{r}
+recipe(mpg ~ ., data = autos_train) |>
+ step_impute_mode(model) |> 
+ step_best_normalize(all_predictors(), -all_nominal()) |> 
+ step_corr(all_numeric(), threshold = 0.75) |> 
+ step_unknown(all_nominal_predictors()) |> 
+ step_lencode_mixed(year, origin, cylinders, outcome = vars(mpg)) |>
+ step_other(make, model, trim, threshold = 0.01) |> 
+ step_dummy_hash(make, model, trim, signed = TRUE, num_terms = 16L) |> 
+ step_zv(all_predictors()) |> 
+ ver()
+```
+
+Ahora crearemos la *receta* que utilizaremos. Esta se diferencia de la anterior
+en que vamos a *tunear* el *threshold* de `step_other`
+
+```{r}
+uni_rec <- recipe(mpg ~ ., data = autos_train) |>
+ step_impute_mode(model) |> 
+ step_best_normalize(all_predictors(), -all_nominal()) |> 
+ step_corr(all_numeric(), threshold = 0.75) |> 
+ step_unknown(all_nominal_predictors()) |> 
+ step_lencode_mixed(year, origin, cylinders, outcome = vars(mpg)) |>
+ step_other(make, model, trim, threshold = tune()) |> 
+ step_dummy_hash(make, model, trim, signed = TRUE, num_terms = 16L) |> 
+ step_zv(all_predictors())
+```
+
+## Modelos
+
+Comencemos revisando que modelos tenemos a nuestra disposición: 
+
+```{r}
+show_engines("mlp") |> 
+ filter(mode == "regression")
+```
+
+### nerunalnet
+
+Al encapsular la función `neuralnet::neuralnet()` dentro del paquete
+{parsnipExtra} de [@R-parsnipExtra] algunos de los argumentos originales
+fueron mapeados a unos más consistentes con el resto de *engines*.
+
+<!-- https://bit.ly/3wDPF3d -->
+
+```{r}
+mlp_neural <- mlp(hidden_units = tune(),     # hidden
+						epochs       = 1000) |>  # rep
+	set_engine(engine    = "neuralnet",
+				  algorithm = "rprop+",
+				  err.fct   = "sse",
+				  act.fct   = "logistic",
+				  threshold = 0.1,
+				  linear.output = TRUE) |> 
+	set_mode("regression")
+```
+
+```{r}
+mlp_neural |> translate()
+```
+
+### nnet
+
+```{r}
+mlp_nnets <- mlp(hidden_units = tune(),
+					  penalty      = tune(),
+					  epochs       = tune()) |>
+	set_engine("nnet") |> 
+	set_mode("regression")
+```
+
+Hay que tener en cuenta que parsnip establece automáticamente la activación
+lineal en la última capa, es decir, para el caso de *nnet* no es posible ajustar
+la función de activación.
+
+
+```{r}
+mlp_param <- mlp_neural |> extract_parameter_set_dials()
+```
+
+## Workflow (Pipeline)
+
+```{r}
+recetas <- list(rec_all = uni_rec)
+```
+
+```{r}
+modelos <- list(
+	neuralnet = mlp_neural
+   nnet      = mlp_nnets
+ )
+```
+
+### Flujo
+
+```{r}
+autos_workflow <- workflow_set(preproc = recetas,
+                               models  = modelos,
+                               cross   = TRUE)
+```
+
+```{r}
+autos_workflow
+```
+
+### Cuadrícula
+
+```{r}
+race_ctrl <- control_race(
+      save_pred     = TRUE,
+      parallel_over = "everything",
+      save_workflow = TRUE)
+```
+
+### Definir métricas
+
+```{r}
+mset <- metric_set(rmse, rsq)
+```
+
+### Tuning
+
+```{r}
+all_cores <- detectCores(logical = FALSE)
+clusterpr <- makePSOCKcluster(all_cores)
+registerDoParallel(clusterpr)
+set.seed(2022)
+```
+
+```{r}
+tic()
+tune_res <- autos_workflow %>%
+  workflow_map(
+    "tune_race_anova",
+    resamples = autos_folds,
+    grid = 20,
+    control = race_ctrl,
+    metrics = mset,
+    seed = 2022,
+    verbose = TRUE)
+toc()
+```
+
+```{r}
+stopCluster(clusterpr)
+unregister()
+```
 
 
 # Referencias
