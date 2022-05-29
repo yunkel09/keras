@@ -65,6 +65,7 @@ cargar los datos se debe utilizar data(autos).
 options(warn = -1,
 		  dplyr.summarise.inform = FALSE,
 		  tibble.print_min = 5,
+		  tidymodels.dark = TRUE,
 		  readr.show_col_types = FALSE)
 ```
 
@@ -80,7 +81,7 @@ import::from(DescTools, JarqueBeraTest)
 import::from(weights, rd, starmaker)
 import::from(colorspace, scale_fill_continuous_divergingx)
 import::from(corrplot, corrplot)
-# import::from(bestNormalize, bestNormalize)
+import::from(bestNormalize, bestNormalize, step_best_normalize)
 import::from(tidytext, reorder_within, scale_y_reordered, scale_x_reordered)
 import::from(nortest, ad.test, pearson.test, sf.test, lillie.test)
 import::from(conectigo, cargar_fuentes)
@@ -94,8 +95,9 @@ pacman::p_load(pins,
 					inspectdf,
 					skimr,
 					finetune,
-					bestNormalize,
 					parsnipExtra,
+					neuralnet,
+					NeuralNetTools,
 					tensorflow,
 					keras,
 					embed,
@@ -359,8 +361,8 @@ autos_raw |> sample_n(size = 10) |>
 </br>
 
 <p class="comment">
-Se observa que la columna name contiene la marca (*make*), el modelo (*model*) y
-el acabado (*trim*). Podemos extraerlo como parte del *feature engineering* 
+Se observa que la columna name contiene la marca y el modelo  y
+el acabado Podemos extraerlo como parte del *feature engineering* 
 </p>
 
 
@@ -370,12 +372,12 @@ el acabado (*trim*). Podemos extraerlo como parte del *feature engineering*
 ```{r}
 pro <- autos_raw |> 
  mutate(across(name, as.character)) |> 
- separate(name, c("make", "model", "trim"),
+ separate(name, c("marca", "modelo", "acabado"),
           extra = "drop", fill = "right")
 ```
 
 ```{r}
-pro |> slice_sample(n = 5) |> tabla(cap = "Missing values en variable trim")
+pro |> slice_sample(n = 5) |> tabla(cap = "Missing values en variable acabado")
 ```
 
 </br>
@@ -388,7 +390,7 @@ pro %>% inspect_na() |> tabla("Valores perdidos")
 
 </br>
 
-Vemos que hay valores perdidos en la columna *trim*
+Vemos que hay valores perdidos en la columna *acabado*
 
 El nivel de equipamiento del modelo **base** de un fabricante de automóviles es
 la versión más simple del nuevo vehículo. Un modelo base representa la variación
@@ -397,7 +399,7 @@ de modelo menos costosa del vehículo que ofrece el fabricante de automóviles.
 específico**, pero el mismo modelo de automóvil puede tener varios niveles de
 equipamiento.^[ver https://bit.ly/3wyko1N].  Por esta razón, agregaremos el
 valor "base" a aquellos vehículos que no tengan especificación (NA) en la
-columna *trim.*
+columna *acabado.*
 
 ```{r}
 # vector de reemplazo
@@ -407,10 +409,10 @@ mk_00 <- c(`1` = "american",  `2` = "european", `3` = "japanese")
 ```{r}
 autos <- autos_raw |> 
  mutate(across(name, as.character)) |> 
- separate(name, c("make", "model", "trim"),
+ separate(name, c("marca", "modelo", "acabado"),
           extra = "drop", fill = "right") |> 
  mutate(
-  across(trim, replace_na, "base"),
+  across(acabado, replace_na, "base"),
   across(origin, recode, !!!mk_00),
   across(where(is.character), as.factor),
   across(c(cylinders, year), as.factor))
@@ -693,9 +695,9 @@ que son variables que influyen en la respuesta.
 
 ```{r, gr-05, fig.cap='(ref:gr-05)', fig.asp = 1}
 autos |> 
- group_by(make) |> 
+ group_by(marca) |> 
  summarise(media = mean(mpg), std_err = sd(mpg) / sqrt(length(mpg))) |> 
- ggplot(aes(x = media, y = fct_reorder(make, media))) +
+ ggplot(aes(x = media, y = fct_reorder(marca, media))) +
  geom_errorbar(aes(xmin = media - 1.64 * std_err, xmax = media + 1.64 * std_err)) + 
  geom_point(color = "#0072B2", size = 3) +
  scale_y_discrete(name = NULL) + drako
@@ -713,8 +715,8 @@ con respecto al nivel de combustible.
 
 ```{r}
 autos |> 
- count(make) |> 
- arrange(make) |> print(n = Inf)
+ count(marca) |> 
+ arrange(marca) |> print(n = Inf)
 ```
 
 ```{r}
@@ -726,7 +728,7 @@ mk_01 <- c(
 ```
 
 ```{r}
-autos %<>% mutate(across(make, recode, !!!mk_01))
+autos %<>% mutate(across(marca, recode, !!!mk_01))
 ```
 
 <p class="comment">
@@ -739,7 +741,7 @@ cotidianas.
 
 ```{r}
 autos_sum <- autos |> 
- group_by(make) |> 
+ group_by(marca) |> 
  summarise(
  	year  = min(as.integer(as.character(year))),
  	mpg   = mean(mpg), 
@@ -751,7 +753,7 @@ autos_sum <- autos |>
 ```{r, gr-06, fig.cap='(ref:gr-06)', fig.asp = 0.9}
 autos_sum |> 
  mutate(across(year, as.factor)) |> 
- ggplot(aes(x = year, y = make, fill = mpg)) +
+ ggplot(aes(x = year, y = marca, fill = mpg)) +
  geom_tile(color = "white", size = 0.25) +
  scale_fill_viridis_c(
     option = "A", begin = 0.05, end = 0.98,
@@ -844,7 +846,7 @@ autos_transformado <- recipe(mpg ~ ., data = autos) %>%
     bind_cols(autos %>% select(where(is.double), -mpg))
 ```
 
-```{r}
+```{r, fig.asp=1}
 autos_transformado %>% 
     pivot_longer(cols = displacement_tr:acceleration,
                          names_to = "variable",
@@ -867,6 +869,7 @@ autos_transformado %>%
 ```{r}
 autos_split <- initial_split(autos, prop = 0.8, strata = mpg)
 autos_train <- training(autos_split)
+autos_test  <- testing(autos_split)
 ```
 
 ```{r}
@@ -878,6 +881,11 @@ dim(autos_train)
 ```{r}
 autos_folds <- vfold_cv(autos_train, v = 10, strata = mpg)
 ```
+
+```{r}
+autos_folds$splits[[1]] |> assessment()
+```
+
 
 ## Transformaciones
 
@@ -901,191 +909,409 @@ com |> reduce(`*`)
 
 El resultado de todas las posibles combinaciones es demasiado grande. Nuestras
 transformaciones deben hacer uso de técnicas más apropiadas para el tratamiento
-de esta alta cardinalidad.  
+de esta alta cardinalidad. 
 
-* `step_impute_mode`: Imputaremos los valores perdidos de `r w[10]` utilizando
-la moda.
+### Receta
 
-* `step_best_normalize`: A como lo demostramos en la sección de asimetría. Este
-paso determina la mejor transformación de cada predictor.
+```{r}
+uni_rec <- recipe(mpg ~ ., data = autos_train) |>
+ step_rm(acabado) |>
+ step_lencode_mixed(year, cylinders, outcome = vars(mpg)) |>
+ step_YeoJohnson(all_numeric(), -all_nominal(), -all_outcomes()) |>
+ step_dummy(origin, one_hot = TRUE) |>
+ step_corr(all_numeric_predictors(), threshold = 0.9) |> 
+ step_impute_mode(modelo) |>
+ step_other(marca, modelo, threshold = 0.01) |>
+ step_dummy_hash(marca, modelo, signed = TRUE, num_terms = 16L) |>
+ step_zv(all_predictors()) |> 
+ step_rename_at(everything(), fn = ~ gsub(replacement = "", x = ., 
+ 													   pattern = "dummyhash_", fixed = TRUE))
+```
 
-* `step_corr`: A como se observó en la sección de *correlación*, hay varios
-predictores con una alta correlación entre ellos. Utilizaremos este filtro para
-eliminar variables que esten muy correlacionadas entre sí.
+A continuación todas las transformaciones que se realizarán al momento de
+realizar el proceso de remuestreo a través de cross-validación:
 
-* `step_unknow`: Le asignará un valor de missing si encuentra una nueva
-categoría. En realidad este paso es innecesario ya que las técnicas para
-codificar variables categóricas ya cuentan con este paso.
+```{r}
+uni_rec |> tidy() |> select(-id)
+```
+
+\
+
+* `step_rm`: En este caso consideraremos que las adecuaciones a los vehículos,
+es decir, los acabados, podrían tener un impacto muy pequeño sino que nulo en
+el `r w[1]`. Removeremos esta variable del análisis.
 
 * `step_lencode_mixed`: Técnica de *codificación de efecto* en el que el valor
 original de la variable categórica se remplaza con un valor que mide el efecto
 de esos datos. Estos pasos usan un modelo lineal generalizado para estimar el
 efecto de cada nivel en un predictor categórico sobre el resultado. [@R-embed]
 
+* `step_YeoJohnson`: No utilizaremos la función `step_best_normalize` debido a
+que la transformación que mejor se adecua para estos predictores es
+`step_orderNorm` y estos valores hacen fallar los modelos de redes neuronales 
+que estamos estudiando.^[No se logró determinar la causa del porque el modelo
+no ajusta con este tipo de transformación, así que elegimos la segunda mejor].
+
+* `step_dummy`: Esta es la codificación de variables categóricas convencional.
+En lugar de utilizar el método que aplica una función de *contraste*, decidimos
+utilizar el parámetro `one_hot = TRUE`.
+
+* `step_corr`: A como se observó en la sección de *correlación*, hay varios
+predictores con una alta correlación entre ellos. Utilizaremos este filtro para
+eliminar variables que estén muy correlacionadas entre sí. El valor fue elegido
+tratando de que no eliminara demasiados predictores.
+
+* `step_impute_mode`: Imputaremos los valores perdidos de `r w[10]` utilizando
+la moda.
+
 * `step_other`: Agrupará valores infrecuentes en las variables categóricas
-dentro de un grupo llamado "otros".  Este *threshold* es *tuneable*. Lo
-aplicaremos únicamente a las variables de mayor cardinalidad.
+dentro de un grupo llamado "otros".  Aunque el *threshold* es *tuneable*, no
+lo realizaremos por que esto hace que el ajuste tarde todavía más. Utilizarmos
+el mismo umbral para las variables `r w[9]` y `r w[10]`.
 
 * `step_dummy_hash`: Aquí aplicaremos *feature hashing*. Esta técnica tiene
 muchas desventajas en cuanto a la interpretabilidad y a los problemas con las
 denominadas colisiones^[ver https://bit.ly/3LHP3hg], sin embargo, como técnica
 de reducción de la dimensionalidad es muy útil ya que podemos definir un
-espacio mucho más pequeño de categorías.
+espacio mucho más pequeño de categorías (reducción de cardinalidad).
 
 * `step_zv`: Es probable que algunas columnas hash contengan todos ceros, por lo
 que realizaremos un filtro de varianza cero para filtrar dichas columnas.
 
-Presentaremos el siguiente ejemplo solo para que se posible apreciar el dataset
-transformado. 
+* `step_rename_at`: Los features creados con el truco del hash tienen un
+prefijo que hace que sea más largo el nombre. Lo mejor es eliminar este prefijo.
+
 \
- 
-```{r}
-recipe(mpg ~ ., data = autos_train) |>
- step_impute_mode(model) |> 
- step_best_normalize(all_predictors(), -all_nominal()) |> 
- step_corr(all_numeric(), threshold = 0.75) |> 
- step_unknown(all_nominal_predictors()) |> 
- step_lencode_mixed(year, origin, cylinders, outcome = vars(mpg)) |>
- step_other(make, model, trim, threshold = 0.01) |> 
- step_dummy_hash(make, model, trim, signed = TRUE, num_terms = 16L) |> 
- step_zv(all_predictors()) |> 
- ver()
-```
-
-Ahora crearemos la *receta* que utilizaremos. Esta se diferencia de la anterior
-en que vamos a *tunear* el *threshold* de `step_other`
 
 ```{r}
-uni_rec <- recipe(mpg ~ ., data = autos_train) |>
- step_impute_mode(model) |> 
- step_best_normalize(all_predictors(), -all_nominal()) |> 
- step_corr(all_numeric(), threshold = 0.75) |> 
- step_unknown(all_nominal_predictors()) |> 
- step_lencode_mixed(year, origin, cylinders, outcome = vars(mpg)) |>
- step_other(make, model, trim, threshold = tune()) |> 
- step_dummy_hash(make, model, trim, signed = TRUE, num_terms = 16L) |> 
- step_zv(all_predictors())
+uni_rec |> ver()
 ```
+
+\
+
+Vemos que posterior a las transformaciones ahora tenemos
+`r ncol(uni_rec %>% ver())` *features*, las cuales son todas numéricas. Los
+valores con -1 los agrega la transformación *feature hashing* cuando hay
+colisiones.
 
 ## Modelos
 
 Comencemos revisando que modelos tenemos a nuestra disposición: 
 
 ```{r}
-show_engines("mlp") |> 
- filter(mode == "regression")
+show_engines("mlp") |> filter(mode == "regression")
 ```
 
-### nerunalnet
+### Neuralnets
 
-Al encapsular la función `neuralnet::neuralnet()` dentro del paquete
-{parsnipExtra} de [@R-parsnipExtra] algunos de los argumentos originales
-fueron mapeados a unos más consistentes con el resto de *engines*.
+Encontramos una adaptación del modelo neuralnets en el paquete {ParsnipExtra}
+para que pudiera adaptarse al framework de tidymodels, sin embargo, después
+de muchas pruebas fue muy complicado hacerlo funcionar. Las razones son las
+siguientes:
 
-<!-- https://bit.ly/3wDPF3d -->
+1. El autor del paquete ParsnipExtra no siguió ciertas convenciones que hacen
+que el paquete se integre de una manera que el paralelismo se realice de manera
+correcta.  Es decir, es posible correr neuralnet sin paralelismo, pero tarda
+demasiado como para que valga la pena probarlo.
+
+2. Al intentar ajustar el modelo sin parámetros para tunear, se hace innecesario
+realizar *resampling*, sin embargo, aun así no hay razón para usar el framework
+de tidymodels. 
+
+La mejor opción es utilizar neuralnet de forma nativa y probar con los
+hiperparámetros que mejor se adaptan. Aun así, obtener la convergencia, dada la
+cantidad de predictores se hace muy lenta.
+
 
 ```{r}
-mlp_neural <- mlp(hidden_units = tune(),     # hidden
-						epochs       = 1000) |>  # rep
+# corrida manual
+ruta <- fs::path_wd("09_redes_neuronales", "autos", "modelos")
+tablero <- board_folder(path = ruta)
+
+#corrida en knit
+# tablero <- board_folder(path = "../modelos")
+```
+
+```{r}
+pin_versions(board = tablero, name = "neural_res")
+```
+
+
+```{r, echo=FALSE}
+neural_res <- pin_read(board = tablero, name = "neural_res")
+```
+
+#### Ajuste del modelo
+
+```{r}
+mlp_neural <- mlp(hidden_units = tune(), 
+						epochs = tune()) |>
+	set_engine("neuralnet") |>
 	set_engine(engine    = "neuralnet",
 				  algorithm = "rprop+",
 				  err.fct   = "sse",
 				  act.fct   = "logistic",
 				  threshold = 0.1,
-				  linear.output = TRUE) |> 
+				  linear.output = FALSE) |>
 	set_mode("regression")
 ```
 
 ```{r}
-mlp_neural |> translate()
+mlp_param <- extract_parameter_set_dials(mlp_neural)
 ```
-
-### nnet
 
 ```{r}
-mlp_nnets <- mlp(hidden_units = tune(),
-					  penalty      = tune(),
-					  epochs       = tune()) |>
-	set_engine("nnet") |> 
-	set_mode("regression")
+mlp_param$object
 ```
+
+```{r}
+race_ctrl <- control_race(
+ 	save_pred     = TRUE, 
+ 	parallel_over = "everything",
+ 	save_workflow = TRUE)
+```
+
+
+```{r}
+lm_wf <- workflow() |> 
+ add_model(mlp_neural) |> 
+ add_recipe(uni_rec)
+```
+
+```{r}
+neu_grid <- crossing(
+ hidden_units = 1:3,
+ epochs = c(100, 200)
+)
+```
+
+```{r}
+tic()
+neural_res <- lm_wf |> 
+ tune_race_anova(
+  resamples = autos_folds,
+  verbose = TRUE,
+  # grid = 20
+  grid = neu_grid,
+  control = race_ctrl)
+toc()
+```
+
+Lo primero que notamos es que obtenemos un *warning*
+
+```{r}
+collect_notes(neural_res)
+```
+
+`rsq()` es simplemente la correlación al cuadrado entre la verdad y la
+estimación.
+
+Debido a que `rsq()` calcula internamente una correlación, si la verdad o la
+estimación son constantes, puede resultar en un error de división por cero. En
+estos casos, se lanza una advertencia y se devuelve NA. Esto puede ocurrir
+cuando un modelo predice un valor único para todas las muestras. Por ejemplo, un
+modelo regularizado que elimine todos los predictores excepto el intercepto
+haría esto. Otro ejemplo sería un modelo CART que no contiene divisiones.
+
+Veamos cuantos modelos fueron ajustados:
+
+```{r}
+nrow(collect_metrics(neural_res, summarize = FALSE))
+```
+
+```{r, eval=FALSE, echo=FALSE}
+pin_write(board = tablero,
+			 x     = neural_res,
+			 name  = "neural_res",
+			 type  = "rds",
+			 title = "neuralnet",
+			 description = "Modelo ajustado con neuralnets")
+```
+
+```{r, echo=FALSE, eval=FALSE}
+pin_versions(tablero, "neural_res")
+```
+
+Ahora veamos de todos los modelos evaluados con cross-validación, cual de
+todos nos dió el mejor resultado.
+
+```{r}
+neural_res |> 
+	select_best(metric = "rmse")
+```
+
+```{r}
+autoplot(neural_res) + 
+  scale_fill_viridis_d(direction = -1) +
+  drako +
+  theme(legend.position = "bottom")
+```
+
+El número de épocas no parece tener un efecto en el rendimiento.
+
+```{r}
+show_best(neural_res) |> select(-.estimator)
+```
+
+Con base en estos resultados, tendría sentido realizar otra ejecución de
+búsqueda en cuadrícula con valores más grandes de la penalización por caída de
+peso.
+
+
+
+
+### nnets
 
 Hay que tener en cuenta que parsnip establece automáticamente la activación
 lineal en la última capa, es decir, para el caso de *nnet* no es posible ajustar
 la función de activación.
 
-
 ```{r}
-mlp_param <- mlp_neural |> extract_parameter_set_dials()
+mlp_nnets <- mlp(hidden_units = tune(),
+                 penalty      = 0.1,
+                 epochs       = tune()) |>
+	set_engine("nnet") %>%
+	set_mode("regression")
 ```
 
-## Workflow (Pipeline)
+Los parámetros específicos del motor utilizado se especifican en la parte de
+`set_engine`.
 
 ```{r}
-recetas <- list(rec_all = uni_rec)
+mlp_nnets
 ```
+
 
 ```{r}
-modelos <- list(
-	neuralnet = mlp_neural
-   nnet      = mlp_nnets
- )
+autos_workflow <- workflow_set(preproc = list(rec_all = uni_rec),
+										 models  = list(nnet = mlp_nnets))
 ```
-
-### Flujo
-
-```{r}
-autos_workflow <- workflow_set(preproc = recetas,
-                               models  = modelos,
-                               cross   = TRUE)
-```
-
-```{r}
-autos_workflow
-```
-
-### Cuadrícula
-
-```{r}
-race_ctrl <- control_race(
-      save_pred     = TRUE,
-      parallel_over = "everything",
-      save_workflow = TRUE)
-```
-
-### Definir métricas
 
 ```{r}
 mset <- metric_set(rmse, rsq)
 ```
 
-### Tuning
 
 ```{r}
+race_ctrl <- control_race(
+ 	save_pred     = TRUE, 
+ 	parallel_over = "everything",
+ 	save_workflow = TRUE)
+```
+
+
+```{r, eval=FALSE}
 all_cores <- detectCores(logical = FALSE)
 clusterpr <- makePSOCKcluster(all_cores)
 registerDoParallel(clusterpr)
-set.seed(2022)
+```
+
+
+```{r, echo=FALSE}
+nnets_res <- pin_read(board = tablero, name = "nnets_res")
+```
+
+```{r, eval=FALSE}
+# 20.36 seg
+tic()
+nnets_res <- autos_workflow |> 
+	workflow_map(
+		"tune_race_anova",
+		seed = 1503,
+		resamples = autos_folds,
+		verbose = TRUE,
+		metrics = mset,
+		grid    = 20, 
+		control = race_ctrl)
+toc()
+```
+
+```{r, eval=FALSE}
+stopCluster(clusterpr)
+unregister()
+```
+
+```{r, eval=FALSE, echo=FALSE}
+pin_write(board = tablero,
+			 x     = nnets_res,
+			 name  = "nnets_res",
+			 type  = "rds",
+			 title = "nnets",
+			 description = "Modelo nnets")
+```
+
+Veamos cuantos modelos fueron ajustados:
+
+```{r}
+(tm <- nrow(collect_metrics(nnets_res, summarize = FALSE)))
+```
+
+## Comparación de modelos
+
+```{r}
+tune_res <- nnets_res |> 
+	bind_rows(as_workflow_set(rec_all_neural = neural_res))
+```
+
+```{r}
+tune_res
+```
+
+Ahora veamos los resultados de las métricas con nuestro conjunto de entrenamiento.
+
+```{r}
+tune_rank <- tune_res %>%
+ rank_results(select_best = TRUE, rank_metric = "rmse") %>%
+ select(modelo = wflow_id, .metric, mean, rank) %>%
+ pivot_wider(names_from = .metric, values_from = mean) |>
+ relocate(modelo, rank)
+```
+
+```{r}
+tune_rank %>%
+ tabla(cap = "Ranking de los mejores ajustes con datos de entrenamiento")
+```
+
+```{r}
+autoplot(tune_res, select_best = TRUE, rank_metric = "rmse") + drako
+```
+
+```{r}
+best <- tune_rank |> 
+ pull(modelo) %>%
+ set_names(.)
+```
+
+```{r}
+mejor_nnet <- nnets_res |> 
+ extract_workflow_set_result(id = "rec_all_nnet") |> 
+ select_best(metric = "rmse")
 ```
 
 ```{r}
 tic()
-tune_res <- autos_workflow %>%
-  workflow_map(
-    "tune_race_anova",
-    resamples = autos_folds,
-    grid = 20,
-    control = race_ctrl,
-    metrics = mset,
-    seed = 2022,
-    verbose = TRUE)
+test_res <- nnets_res	|> 
+ extract_workflow(id = best) |> 
+ finalize_workflow(mejor_nnet) |> 
+ last_fit(split = autos_split, metrics = mset)
 toc()
 ```
 
 ```{r}
-stopCluster(clusterpr)
-unregister()
+metricas_test <- test_res %>% collect_metrics() |> 
+ pivot_wider(names_from = .metric, values_from = .estimate) |> 
+ select(-c(.estimator:.config))
 ```
+
+```{r}
+metricas_test |> tabla("Métricas con el conjunto de prueba")
+```
+
+
+
+## Resultados
+
+
 
 
 # Referencias

@@ -372,7 +372,8 @@ recetas <- list(normalizado = solo_normalizado,
 					 sesgo_yeojh = normalizado_yeoj)
 
 # motores de redes neuronales candidatos
-modelos_sin_gpu <- list(nnets = mlp_nnets, lasso = lasso_reg)
+modelos_sin_gpu <- list(nnets = mlp_nnets)
+								# lasso = lasso_reg)
 modelos_con_gpu <- list(keras = mlp_keras)
 
 ### . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . ..
