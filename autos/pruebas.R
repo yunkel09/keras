@@ -43,14 +43,6 @@ autos <- autos_raw |>
 ver <- . %>% prep() %>% juice()
 
 
-# Al tratar el año como una variable categórica, se calculará el efecto de cada
-# año individual, es decir, qué impacto en la variable objetivo tuvo en promedio
-# en un año determinado. Por otro lado, incluir t como variable numérica dice lo
-# que sucede en promedio dos años después.
-autos2 <- autos |> select(where(is.double), year, origin, cylinders, make, model)
-autos2 <- autos |> select(where(is.double)) |> select(mpg, weight) |> 
-	slice_sample(n = 100)
-
 autos_split <- initial_split(autos, prop = 0.8, strata = mpg)
 autos_train <- training(autos_split)
 
