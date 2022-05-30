@@ -867,7 +867,7 @@ autos_transformado %>%
 ## Split
 
 ```{r}
-autos_split <- initial_split(autos, prop = 0.8, strata = mpg)
+autos_split <- initial_split(autos, prop = 0.7, strata = mpg)
 autos_train <- training(autos_split)
 autos_test  <- testing(autos_split)
 ```
@@ -879,7 +879,7 @@ dim(autos_train)
 ## Cross-validación
 
 ```{r}
-autos_folds <- vfold_cv(autos_train, v = 2, strata = mpg)
+autos_folds <- vfold_cv(autos_train, v = 10, strata = mpg)
 ```
 
 ```{r}
@@ -914,12 +914,20 @@ de esta alta cardinalidad.
 ### Recetas
 
 ```{r}
+transformar <- function(df) {
+ recipe(mpg ~ ., data = df) |> 
+ step_select(where(is.numeric)) |> 
+ step_corr(all_numeric_predictors(), threshold = 0.9) |> 
+ step_range(all_predictors())
+}
+```
+
+
+```{r}
 simple_rec <- recipe(mpg ~ ., data = autos_train) |> 
  step_select(where(is.numeric)) |> 
  step_corr(all_numeric_predictors(), threshold = 0.9) |> 
  step_range(all_predictors())
- # step_YeoJohnson(all_numeric(), -all_nominal(), -all_outcomes())
- # step_range(all_predictors())
 ```
 
 ```{r}
@@ -1051,18 +1059,21 @@ pin_versions(board = tablero, name = "neural_res")
 ```
 
 
-```{r, echo=FALSE}
-neural_res <- pin_read(board = tablero, name = "neural_res")
-```
 
 #### Ajuste del modelo
 
+
 ```{r}
-mlp_neural <- mlp(hidden_units = 3, 
-						epochs = 1) |>
+metricas_neural <- metric_set(rmse, mae)
+```
+
+```{r}
+mlp_neural <- mlp(hidden_units = 10, 
+						epochs = 10) |>
 	set_engine("neuralnet") |>
 	set_engine(engine    = "neuralnet",
 				  algorithm = "rprop+",
+				  stepmax   = 1e6,
 				  err.fct   = "sse",
 				  act.fct   = "logistic",
 				  threshold = 0.1,
@@ -1071,84 +1082,199 @@ mlp_neural <- mlp(hidden_units = 3,
 ```
 
 ```{r}
-mlp_param <- extract_parameter_set_dials(mlp_neural)
-```
-
-```{r}
-mlp_param$object
-```
-
-```{r}
-parametros <- mlp_param |> 
-	update(epochs = epochs(c(100, 300)),
-			 hidden_units = hidden_units(c(1, 5)))
-```
-
-
-```{r}
-race_ctrl <- control_race(
- 	save_pred     = TRUE, 
- 	parallel_over = "everything",
- 	save_workflow = TRUE)
-```
-
-
-```{r}
-lm_wf <- workflow() |> 
+neural_wflow <- workflow() |> 
  add_model(mlp_neural) |> 
  add_recipe(simple_rec)
 ```
 
+#### Sin remuestreo
+
+
+```{r, echo=FALSE}
+neural_fixfit <- pin_read(board = tablero, name = "neural_res")
+```
+
+```{r, eval=FALSE}
+# 100.62 seg
+tic()
+neural_fixfit <- parsnip::fit(neural_wflow, autos_train)
+toc()
+```
+
+Es necesario extraer el modelo (clase "nn") del *wrapper* workflow. De esta
+manera será posible utilizarlo como si hubiéramos usado directamente la
+función `neuralnet()`.
+
 ```{r}
-keep_pred <- control_resamples(save_pred = TRUE, save_workflow = TRUE)
+neural_ajuste <- neural_fixfit |> extract_fit_engine()
 ```
 
 ```{r}
+names(neural_ajuste)
+```
+
+```{r}
+plotnet(neural_ajuste)
+```
+
+Se debe aplicar la misma transformación que tuvieron los datos de entrenamiento
+a los datos de prueba:
+
+```{r, eval=FALSE}
+cl <- makePSOCKcluster(4)
+registerDoParallel(cl)
+```
+
+`last_fit()` ajustará el modelo a todo el conjunto de entrenamiento y lo
+evaluará con el conjunto de prueba.
+
+
+
+```{r, echo=FALSE}
+final_neural_res <- pin_read(board = tablero, 
+									  name = "final_neural_res", 
+									  version = d)
+```
+
+
+```{r, eval=FALSE}
+# 253 seg
 tic()
-neural_fit <- parsnip::fit(lm_wf, autos_train)
+final_neural_res <- last_fit(neural_wflow, autos_split)
+toc()
+```
+
+```{r, eval=FALSE}
+stopCluster(cl)
+unregister()
+```
+
+
+```{r, eval=FALSE, echo=FALSE}
+pin_write(board = tablero,
+			 x     = final_neural_res,
+			 name  = "final_neural_res",
+			 type  = "rds",
+			 title = "ajuste al conjunto de prueba",
+			 description = "sin resampling")
+```
+
+```{r, echo=FALSE, eval=FALSE}
+pin_versions(tablero, "final_neural_res")
+```
+
+
+```{r}
+wflow_ajustado <- extract_workflow(final_neural_res)
+```
+
+Veamos ahora las métricas resultantes para cada pliego (*Fold*) de forma
+individual y luego veámosla el promedio general.
+
+```{r}
+final_neural_res |> 
+ collect_metrics(summarize = F) |> 
+ pivot_wider(names_from = .metric, values_from = .estimate) |> 
+ select(-c(.estimator, .config)) |> 
+ mutate(id = "test_results", .before = 1) |> 
+ tabla("Resultados del ajuste")
+```
+
+
+```{r}
+collect_predictions(final_neural_res) |> 
+ ggplot(aes(x = mpg, y = .pred)) +
+ geom_abline(lty = 2) + 
+ geom_point(alpha = 0.5) + 
+ labs(y = "Predicted MPG", x = "Real MPG") +
+ coord_obs_pred()
+```
+
+#### Con remuestreo
+
+```{r}
+keep_pred <- control_resamples(save_pred = TRUE,
+										 save_workflow = TRUE)
+```
+
+Con `fit_resamples()` obtendremos estimaciones más realistas que si solo
+aplicamos el ajuste de forma directa.
+
+```{r, echo=FALSE, eval=FALSE}
+pin_versions(tablero, "neural_res")
+```
+
+
+```{r, eval=FALSE}
+set.seed(1003)
+tic()
+neu_res <- neural_wflow |> 
+ fit_resamples(
+ 	resamples = autos_folds,
+ 	metrics = metricas_neural,
+ 	control = keep_pred)
 toc()
 ```
 
 
+```{r, eval=FALSE, echo=FALSE}
+pin_write(board = tablero,
+			 x     = neu_res,
+			 name  = "neural_res",
+			 type  = "rds",
+			 title = "neuralnet sin parámetros y con 10 capas y 10 epochs",
+			 description = "con resampling y errores")
+```
+
+
+Veamos ahora las métricas resultantes para cada pliego (*Fold*) de forma
+individual y luego veámosla el promedio general.
+
 ```{r}
-neural_res <- neural_fit |> extract_fit_engine()
+neu_res |> 
+ collect_metrics(summarize = F) |> 
+ pivot_wider(names_from = .metric, values_from = .estimate) |> 
+ select(-c(.estimator, .config))
+```
+
+
+```{r}
+neu_res |> 
+ collect_metrics(summarize = T) |> 
+ select(.metric, mean, .config) |> 
+ pivot_wider(names_from = .metric, values_from = mean)
 ```
 
 ```{r}
-names(neural_res)
+as_workflow_set(h = neu_res) |> 
+ autoplot(select_best = TRUE, rank_metric = "rmse") + drako
 ```
-
-
-
-Lo primero que notamos es que obtenemos un *warning*
 
 ```{r}
-collect_notes(neural_res)
+assess_res <- neu_res |> collect_predictions()
 ```
-
-`rsq()` es simplemente la correlación al cuadrado entre la verdad y la
-estimación.
-
-Debido a que `rsq()` calcula internamente una correlación, si la verdad o la
-estimación son constantes, puede resultar en un error de división por cero. En
-estos casos, se lanza una advertencia y se devuelve NA. Esto puede ocurrir
-cuando un modelo predice un valor único para todas las muestras. Por ejemplo, un
-modelo regularizado que elimine todos los predictores excepto el intercepto
-haría esto. Otro ejemplo sería un modelo CART que no contiene divisiones.
-
-Veamos cuantos modelos fueron ajustados:
 
 ```{r}
-nrow(collect_metrics(neural_res, summarize = FALSE))
+assess_res
 ```
+
+```{r}
+assess_res %>% 
+  ggplot(aes(x = mpg, y = .pred)) + 
+  geom_point(alpha = .15) +
+  geom_abline(color = "red") + 
+  coord_obs_pred() + 
+  ylab("Predicted")
+```
+
 
 ```{r, eval=FALSE, echo=FALSE}
 pin_write(board = tablero,
-			 x     = neural_res,
+			 x     = neu_res,
 			 name  = "neural_res",
 			 type  = "rds",
 			 title = "neuralnet sin parámetros",
-			 description = "solo con fit, funcionó nítido, pero solo variables numéricas")
+			 description = "con resampling y errores")
 ```
 
 ```{r, echo=FALSE, eval=FALSE}
@@ -1157,42 +1283,16 @@ pin_versions(tablero, "neural_res")
 
 ```{r, eval=FALSE, echo=FALSE}
 pin_meta(tablero, "neural_res", 
-			version = pin_versions(tablero, "neural_res")$version[[6]])$description
-```
-
-
-Ahora veamos de todos los modelos evaluados con cross-validación, cual de
-todos nos dió el mejor resultado.
-
-```{r}
-neural_res |> 
-	select_best(metric = "rmse")
+			version = pin_versions(tablero, "neural_res")$version[[7]])$description
 ```
 
 ```{r}
-neural_res |> 
-	collect_metrics()
+olden(neural_ajuste)
 ```
-
 
 ```{r}
-autoplot(neural_res) + 
-  scale_fill_viridis_d(direction = -1) +
-  drako +
-  theme(legend.position = "bottom")
+# lekprofile(neural_ajuste, group_show = TRUE)
 ```
-
-El número de épocas no parece tener un efecto en el rendimiento.
-
-```{r}
-show_best(neural_res) |> select(-.estimator)
-```
-
-Con base en estos resultados, tendría sentido realizar otra ejecución de
-búsqueda en cuadrícula con valores más grandes de la penalización por caída de
-peso.
-
-
 
 
 ### nnets
