@@ -913,15 +913,9 @@ de esta alta cardinalidad.
 
 ### Recetas
 
-```{r}
-transformar <- function(df) {
- recipe(mpg ~ ., data = df) |> 
- step_select(where(is.numeric)) |> 
- step_corr(all_numeric_predictors(), threshold = 0.9) |> 
- step_range(all_predictors())
-}
-```
-
+Crearemos dos recetas. La primera será la más simple de todas y solo incluiremos
+predictores numéricos, es decir, no incluiremos predictores categóricos. El
+objetivo es ver el comportamiento de la red con pocos predictores.
 
 ```{r}
 simple_rec <- recipe(mpg ~ ., data = autos_train) |> 
@@ -934,6 +928,8 @@ simple_rec <- recipe(mpg ~ ., data = autos_train) |>
 simple_rec |> ver()
 ```
 
+Para la segunda receta consideramos todos los predictores y se aplicaron más
+pasos en las transformaciones. 
 
 ```{r}
 uni_rec <- recipe(mpg ~ ., data = autos_train) |>
@@ -1026,23 +1022,16 @@ show_engines("mlp") |> filter(mode == "regression")
 
 ### Neuralnets
 
-Encontramos una adaptación del modelo neuralnets en el paquete {ParsnipExtra}
-para que pudiera adaptarse al framework de tidymodels, sin embargo, después
-de muchas pruebas fue muy complicado hacerlo funcionar. Las razones son las
-siguientes:
+Encontramos una adaptación del modelo *neuralnet* en el paquete {ParsnipExtra}
+para que pudiera adaptarse al framework de tidymodels, sin embargo, no podremos
+aplicarlo de manera normal a como con el resto de paquetes integrados. La
+razón es la siguiente:
 
-1. El autor del paquete ParsnipExtra no siguió ciertas convenciones que hacen
+El autor del paquete ParsnipExtra no siguió ciertas convenciones que hacen
 que el paquete se integre de una manera que el paralelismo se realice de manera
 correcta.  Es decir, es posible correr neuralnet sin paralelismo, pero tarda
-demasiado como para que valga la pena probarlo.
-
-2. Al intentar ajustar el modelo sin parámetros para tunear, se hace innecesario
-realizar *resampling*, sin embargo, aun así no hay razón para usar el framework
-de tidymodels. 
-
-La mejor opción es utilizar neuralnet de forma nativa y probar con los
-hiperparámetros que mejor se adaptan. Aun así, obtener la convergencia, dada la
-cantidad de predictores se hace muy lenta.
+demasiado. Lo que se hizo fue correrlo sin realizar el *tuning* de los
+hiperparámetros.
 
 
 ```{r}
@@ -1059,13 +1048,21 @@ pin_versions(board = tablero, name = "neural_res")
 ```
 
 
-
 #### Ajuste del modelo
-
 
 ```{r}
 metricas_neural <- metric_set(rmse, mae)
 ```
+
+A continuación vamos a inicializar el *motor* de neuralnet a través de la
+interfaz de Tidymodels.  Los principales hiperparámetros fueron mapeados de
+la función original `neuralnet()`. 
+
+A como se explicó anteriormente, no será posible realizar la optimización de
+hiperparámetros, por lo que probaremos con 10 capas y 10 épocas.  El resto
+de parámetros específicos de `neuralnet()` se definen en la sección de
+`set_engine()`.  Incrementamos el `stepmax` para darle tiempo al algoritmo de
+converger.
 
 ```{r}
 mlp_neural <- mlp(hidden_units = 10, 
@@ -1129,12 +1126,6 @@ registerDoParallel(cl)
 evaluará con el conjunto de prueba.
 
 
-
-```{r, echo=FALSE}
-final_neural_res <- pin_read(board = tablero, 
-									  name = "final_neural_res", 
-									  version = d)
-```
 
 
 ```{r, eval=FALSE}
@@ -1204,6 +1195,15 @@ aplicamos el ajuste de forma directa.
 pin_versions(tablero, "neural_res")
 ```
 
+```{r, echo=FALSE, eval=FALSE}
+# ver cual versión debo cargar
+ver <- pin_versions(tablero, "neural_res")$version[[10]]
+pin_meta(tablero, "neural_res", version = ver)$description
+```
+
+```{r, echo=FALSE}
+neu_res <- pin_read(board = tablero, name = "neural_res", version = ver)
+```
 
 ```{r, eval=FALSE}
 set.seed(1003)
@@ -1211,11 +1211,17 @@ tic()
 neu_res <- neural_wflow |> 
  fit_resamples(
  	resamples = autos_folds,
- 	metrics = metricas_neural,
- 	control = keep_pred)
+ 	metrics   = metricas_neural,
+ 	control   = keep_pred)
 toc()
 ```
 
+```{r}
+neu_res
+```
+
+Vemos que el algoritmo no logró converger en uno de los *Folds* dentro de
+la cantidad de pasos que establecimos.
 
 ```{r, eval=FALSE, echo=FALSE}
 pin_write(board = tablero,
@@ -1226,24 +1232,27 @@ pin_write(board = tablero,
 			 description = "con resampling y errores")
 ```
 
-
 Veamos ahora las métricas resultantes para cada pliego (*Fold*) de forma
 individual y luego veámosla el promedio general.
 
 ```{r}
 neu_res |> 
- collect_metrics(summarize = F) |> 
+ collect_metrics(summarize = FALSE) |> 
  pivot_wider(names_from = .metric, values_from = .estimate) |> 
- select(-c(.estimator, .config))
+ select(-c(.estimator, .config)) |> 
+ tabla("Métricas por pliego")
 ```
 
+Ahora veamos el promedio de todas las métricas calculadas con cross-validación:
 
 ```{r}
 neu_res |> 
- collect_metrics(summarize = T) |> 
+ collect_metrics(summarize = TRUE) |> 
  select(.metric, mean, .config) |> 
- pivot_wider(names_from = .metric, values_from = mean)
+ pivot_wider(names_from = .metric, values_from = mean) |> 
+ tabla("Promedio RMSE de todos los pliegos")
 ```
+
 
 ```{r}
 as_workflow_set(h = neu_res) |> 
@@ -1255,7 +1264,8 @@ assess_res <- neu_res |> collect_predictions()
 ```
 
 ```{r}
-assess_res
+assess_res |> slice_sample(n = 10) |> 
+	select(-.row, -.config)
 ```
 
 ```{r}
@@ -1267,23 +1277,77 @@ assess_res %>%
   ylab("Predicted")
 ```
 
+En general la nube de punto está bastante cercana a la diagonal. Hay algunos
+puntos que están subestimados y otros sobre-estimados, pero en general no
+observamos que hayan puntos que se salgan demasiado.
 
-```{r, eval=FALSE, echo=FALSE}
-pin_write(board = tablero,
-			 x     = neu_res,
-			 name  = "neural_res",
-			 type  = "rds",
-			 title = "neuralnet sin parámetros",
-			 description = "con resampling y errores")
+Para un uso posterior, convertiremos los resultados del *resampling* en un
+objeto de clase `workflow_set`.  Esto nos servirá para realizar comparaciones y
+otras cosas.
+
+```{r}
+neural_res <- as_workflow_set(rec_all_neural = neu_res)
 ```
 
-```{r, echo=FALSE, eval=FALSE}
-pin_versions(tablero, "neural_res")
+```{r}
+tune_rank_neural <- neural_res |>
+ rank_results(select_best = TRUE, rank_metric = "rmse") %>%
+ select(modelo = wflow_id, .metric, mean, rank) %>%
+ pivot_wider(names_from = .metric, values_from = mean) |>
+ relocate(modelo, rank)
 ```
 
-```{r, eval=FALSE, echo=FALSE}
-pin_meta(tablero, "neural_res", 
-			version = pin_versions(tablero, "neural_res")$version[[7]])$description
+```{r}
+best_neural <- tune_rank_neural |> 
+ pull(modelo) %>%
+ set_names(.)
+```
+
+```{r}
+mejor_neural <- neural_res |> 
+ extract_workflow_set_result(id = "rec_all_neural") |> 
+ select_best(metric = "rmse")
+```
+
+Antes de realizar el ajuste (*fit*) definitivo con `last_fit()` en los datos
+de prueba, vamos a ajustar el modelo con el fin de obtener un objeto de clase
+**nn** que nos servirá para realizar los gráficos que interesan
+
+```{r}
+tic()
+neural_samfit <- neural_res |> 
+ extract_workflow(id = best_neural) |> 
+ finalize_workflow(mejor_neural) |> 
+ fit(autos_train)
+toc()
+```
+
+```{r}
+neural_nativo <- extract_fit_engine(neural_samfit)
+```
+
+```{r}
+names(neural_nativo)
+```
+
+```{r}
+plotnet(neural_nativo)
+```
+
+
+
+```{r}
+tic()
+test_neural_res <- neural_res	|> 
+ extract_workflow(id = best_neural) |> 
+ finalize_workflow(mejor_neural) |> 
+ last_fit(split = autos_split, metrics = metricas_neural)
+toc()
+```
+
+
+```{r}
+modelo_neuralnet <- extract_fit_engine(neu_res)
 ```
 
 ```{r}
@@ -1293,6 +1357,39 @@ olden(neural_ajuste)
 ```{r}
 # lekprofile(neural_ajuste, group_show = TRUE)
 ```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 ### nnets
@@ -1341,10 +1438,20 @@ clusterpr <- makePSOCKcluster(all_cores)
 registerDoParallel(clusterpr)
 ```
 
+```{r, echo=FALSE, eval=FALSE}
+pin_versions(tablero, "nnets_res")
+```
+
+```{r, echo=FALSE, eval=FALSE}
+# ver cual versión debo cargar
+ver <- pin_versions(tablero, "nnets_res")$version[[1]]
+pin_meta(tablero, "nnets_res", version = ver)$description
+```
 
 ```{r, echo=FALSE}
-nnets_res <- pin_read(board = tablero, name = "nnets_res")
+nnets_res <- pin_read(board = tablero, name = "nnets_res", version = ver)
 ```
+
 
 ```{r, eval=FALSE}
 # 20.36 seg
@@ -1381,21 +1488,10 @@ Veamos cuantos modelos fueron ajustados:
 (tm <- nrow(collect_metrics(nnets_res, summarize = FALSE)))
 ```
 
-## Comparación de modelos
-
-```{r}
-tune_res <- nnets_res |> 
-	bind_rows(as_workflow_set(rec_all_neural = neural_res))
-```
-
-```{r}
-tune_res
-```
-
 Ahora veamos los resultados de las métricas con nuestro conjunto de entrenamiento.
 
 ```{r}
-tune_rank <- tune_res %>%
+tune_rank <- nnets_res %>%
  rank_results(select_best = TRUE, rank_metric = "rmse") %>%
  select(modelo = wflow_id, .metric, mean, rank) %>%
  pivot_wider(names_from = .metric, values_from = mean) |>
