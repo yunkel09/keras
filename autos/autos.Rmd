@@ -1047,8 +1047,7 @@ tablero <- board_folder(path = ruta, versioned = TRUE)
 pin_versions(board = tablero, name = "neural_res")
 ```
 
-
-#### Ajuste del modelo
+#### Ajuste
 
 ```{r}
 metricas_neural <- metric_set(rmse, mae)
@@ -1084,104 +1083,6 @@ neural_wflow <- workflow() |>
  add_recipe(simple_rec)
 ```
 
-#### Sin remuestreo
-
-
-```{r, echo=FALSE}
-neural_fixfit <- pin_read(board = tablero, name = "neural_res")
-```
-
-```{r, eval=FALSE}
-# 100.62 seg
-tic()
-neural_fixfit <- parsnip::fit(neural_wflow, autos_train)
-toc()
-```
-
-Es necesario extraer el modelo (clase "nn") del *wrapper* workflow. De esta
-manera será posible utilizarlo como si hubiéramos usado directamente la
-función `neuralnet()`.
-
-```{r}
-neural_ajuste <- neural_fixfit |> extract_fit_engine()
-```
-
-```{r}
-names(neural_ajuste)
-```
-
-```{r}
-plotnet(neural_ajuste)
-```
-
-Se debe aplicar la misma transformación que tuvieron los datos de entrenamiento
-a los datos de prueba:
-
-```{r, eval=FALSE}
-cl <- makePSOCKcluster(4)
-registerDoParallel(cl)
-```
-
-`last_fit()` ajustará el modelo a todo el conjunto de entrenamiento y lo
-evaluará con el conjunto de prueba.
-
-
-
-
-```{r, eval=FALSE}
-# 253 seg
-tic()
-final_neural_res <- last_fit(neural_wflow, autos_split)
-toc()
-```
-
-```{r, eval=FALSE}
-stopCluster(cl)
-unregister()
-```
-
-
-```{r, eval=FALSE, echo=FALSE}
-pin_write(board = tablero,
-			 x     = final_neural_res,
-			 name  = "final_neural_res",
-			 type  = "rds",
-			 title = "ajuste al conjunto de prueba",
-			 description = "sin resampling")
-```
-
-```{r, echo=FALSE, eval=FALSE}
-pin_versions(tablero, "final_neural_res")
-```
-
-
-```{r}
-wflow_ajustado <- extract_workflow(final_neural_res)
-```
-
-Veamos ahora las métricas resultantes para cada pliego (*Fold*) de forma
-individual y luego veámosla el promedio general.
-
-```{r}
-final_neural_res |> 
- collect_metrics(summarize = F) |> 
- pivot_wider(names_from = .metric, values_from = .estimate) |> 
- select(-c(.estimator, .config)) |> 
- mutate(id = "test_results", .before = 1) |> 
- tabla("Resultados del ajuste")
-```
-
-
-```{r}
-collect_predictions(final_neural_res) |> 
- ggplot(aes(x = mpg, y = .pred)) +
- geom_abline(lty = 2) + 
- geom_point(alpha = 0.5) + 
- labs(y = "Predicted MPG", x = "Real MPG") +
- coord_obs_pred()
-```
-
-#### Con remuestreo
 
 ```{r}
 keep_pred <- control_resamples(save_pred = TRUE,
@@ -1334,9 +1235,31 @@ names(neural_nativo)
 plotnet(neural_nativo)
 ```
 
-
-
 ```{r}
+olden(neural_nativo)
+```
+
+#### Evaluar desempeño
+
+Procederemos a evaluar el desempeño de nuestro modelo con el conjunto de
+prueba
+
+```{r, echo=FALSE, eval=FALSE}
+pin_versions(tablero, "final_neural_res")
+```
+
+```{r, echo=FALSE, eval=FALSE}
+# ver cual versión debo cargar
+ver <- pin_versions(tablero, "final_neural_res")$version[[2]]
+pin_meta(tablero, "final_neural_res", version = ver)$description
+```
+
+```{r, echo=FALSE}
+test_neural_res <- pin_read(board = tablero, name = "final_neural_res", version = ver)
+```
+
+
+```{r, eval=FALSE}
 tic()
 test_neural_res <- neural_res	|> 
  extract_workflow(id = best_neural) |> 
@@ -1346,50 +1269,23 @@ toc()
 ```
 
 
-```{r}
-modelo_neuralnet <- extract_fit_engine(neu_res)
+```{r, eval=FALSE, echo=FALSE}
+pin_write(board = tablero,
+			 x     = test_neural_res,
+			 name  = "final_neural_res",
+			 type  = "rds",
+			 title = "con resampling",
+			 description = "ajuste final con datos de pruebas usando last_fit")
 ```
 
 ```{r}
-olden(neural_ajuste)
+test_neural_res |> 
+ collect_metrics(summarize = TRUE) |>  
+ select(.metric, .estimate) |> 
+ pivot_wider(names_from = .metric, values_from = .estimate) |> 
+ mutate(id = "conjunto_prueba", .before = 1) |> 
+ tabla("Desempeño con el conjunto de prueba")
 ```
-
-```{r}
-# lekprofile(neural_ajuste, group_show = TRUE)
-```
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 ### nnets
@@ -1416,13 +1312,12 @@ mlp_nnets
 
 ```{r}
 autos_workflow <- workflow_set(preproc = list(rec_all = uni_rec),
-										 models  = list(nnet = mlp_nnets))
+                               models  = list(nnet = mlp_nnets))
 ```
 
 ```{r}
 mset <- metric_set(rmse, rsq)
 ```
-
 
 ```{r}
 race_ctrl <- control_race(
@@ -1431,12 +1326,13 @@ race_ctrl <- control_race(
  	save_workflow = TRUE)
 ```
 
-
 ```{r, eval=FALSE}
-all_cores <- detectCores(logical = FALSE)
-clusterpr <- makePSOCKcluster(all_cores)
-registerDoParallel(clusterpr)
+cl <- makePSOCKcluster(10)
+registerDoParallel(cl)
 ```
+
+
+<!---------------------- cargar objetos con pin ------------------------------->
 
 ```{r, echo=FALSE, eval=FALSE}
 pin_versions(tablero, "nnets_res")
@@ -1444,7 +1340,7 @@ pin_versions(tablero, "nnets_res")
 
 ```{r, echo=FALSE, eval=FALSE}
 # ver cual versión debo cargar
-ver <- pin_versions(tablero, "nnets_res")$version[[1]]
+ver <- pin_versions(tablero, "nnets_res")$version[[2]]
 pin_meta(tablero, "nnets_res", version = ver)$description
 ```
 
@@ -1452,9 +1348,22 @@ pin_meta(tablero, "nnets_res", version = ver)$description
 nnets_res <- pin_read(board = tablero, name = "nnets_res", version = ver)
 ```
 
+<!-- ----------------------------------------------------------------------- -->
+
 
 ```{r, eval=FALSE}
-# 20.36 seg
+# cores: 4,  t = 30.36 seg
+# cores: 6,  t = 24.30 seg
+# cores: 8,  t = 21.00 seg
+# cores: 9,  t = 20.30 seg
+# cores: 10, t = 19.81 seg
+# cores: 10, t = 19.44 seg
+# cores: 10, t = 19.35 seg
+# cores: 10, t = 18.65 seg
+# cores: 11, t = 20.71 seg
+# cores: 11, t = 19.50 seg
+# cores: 12, t = 19.60 seg
+# cores: 12, t = 19.55 seg
 tic()
 nnets_res <- autos_workflow |> 
 	workflow_map(
@@ -1469,7 +1378,7 @@ toc()
 ```
 
 ```{r, eval=FALSE}
-stopCluster(clusterpr)
+stopCluster(cl)
 unregister()
 ```
 
@@ -1479,7 +1388,7 @@ pin_write(board = tablero,
 			 name  = "nnets_res",
 			 type  = "rds",
 			 title = "nnets",
-			 description = "Modelo nnets")
+			 description = "workflow_set de nnets")
 ```
 
 Veamos cuantos modelos fueron ajustados:
@@ -1508,7 +1417,7 @@ autoplot(tune_res, select_best = TRUE, rank_metric = "rmse") + drako
 ```
 
 ```{r}
-best <- tune_rank |> 
+best_nnet <- tune_rank |> 
  pull(modelo) %>%
  set_names(.)
 ```
@@ -1521,21 +1430,23 @@ mejor_nnet <- nnets_res |>
 
 ```{r}
 tic()
-test_res <- nnets_res	|> 
- extract_workflow(id = best) |> 
+test_nnet_res <- nnets_res	|> 
+ extract_workflow(id = best_nnet) |> 
  finalize_workflow(mejor_nnet) |> 
  last_fit(split = autos_split, metrics = mset)
 toc()
 ```
 
 ```{r}
-metricas_test <- test_res %>% collect_metrics() |> 
+metricas_test_nnet <- test_nnet_res %>% collect_metrics() |> 
  pivot_wider(names_from = .metric, values_from = .estimate) |> 
  select(-c(.estimator:.config))
 ```
 
 ```{r}
-metricas_test |> tabla("Métricas con el conjunto de prueba")
+metricas_test_nnet |>
+ mutate(id = "conjunto_prueba", .before = 1) |>
+ tabla("Métricas con el conjunto de prueba para nnet")
 ```
 
 
